@@ -261,3 +261,4 @@ public class DonutMod implements ModInitializer {
         return 1;
     }
 }
+import de.donutmod.core.Stack;
