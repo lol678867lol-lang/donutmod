@@ -23,6 +23,14 @@ import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.enchantment.ItemEnchantments;
+import com.mojang.brigadier.builder.LiteralArgumentBuilder;
+import net.minecraft.core.Holder;
+import net.minecraft.core.registries.Registries;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
+import net.minecraft.world.item.component.ItemContainerContents;
+import net.minecraft.world.item.enchantment.Enchantment;
 
 import com.google.gson.Gson;
 import com.google.gson.reflect.TypeToken;
@@ -80,8 +88,11 @@ public class DonutMod implements ModInitializer {
             {"trident",12000},{"mace",30000},{"heavy_core",20000},{"wind_charge",150},{"breeze_rod",600}
         };
 
+    static DonutMod INSTANCE;
+
     @Override
     public void onInitialize() {
+        INSTANCE = this;
         for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
         prices.setEnchantValue("minecraft:protection", 800_000);
         prices.setEnchantValue("minecraft:sharpness", 600_000);
@@ -91,7 +102,7 @@ public class DonutMod implements ModInitializer {
 
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> registerCommands(d));
 
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; loadBalances(); PriceFile.loadInto(prices); initItems(); seedOrders(); seedAh(); });
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; loadBalances(); initEnchants(); PriceFile.loadInto(prices); initItems(); seedOrders(); seedAh(); });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> { refundOrders(); saveBalances(); });
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> createBoard(handler.getPlayer()));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> boards.remove(handler.getPlayer().getUUID()));
@@ -150,7 +161,8 @@ public class DonutMod implements ModInitializer {
     }
 
     // ---- Bot-Logik ----
-    static final int MIN_AH = 10_000, MIN_ORDERS = 3_000;
+    static final int MIN_AH = 100_000, MIN_ORDERS = 75_000;
+    static final double BOT_ORDER_FILL = 0.01;   // Chance pro Minute, dass ein Bot-Order teilweise gefuellt wird
     static final Map<String, Item> ITEM_BY_ID = new HashMap<>();
     final List<Item> pool = new ArrayList<>();
     static final String[] BAD = {"spawn_egg", "command_block", "structure_", "barrier", "light", "debug_stick", "jigsaw",
@@ -171,24 +183,119 @@ public class DonutMod implements ModInitializer {
         }
     }
 
-    /** Mindestens 500 Bot-Orders mit zufaelligen Items. */
-    void seedOrders() {
-        if (pool.isEmpty()) return;
-        while (orders.all().size() < MIN_ORDERS) {
-            Item it = pool.get(RND.nextInt(pool.size()));
-            int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-            int amt = max > 1 ? 16 + RND.nextInt(max * 3) : 1 + RND.nextInt(5);
-            orders.botOrder(BuiltInRegistries.ITEM.getKey(it).toString(), Map.of(), amt, RND);
+    final Map<Item, String> idCache = new HashMap<>();
+    static final Map<Item, String> NAME_CACHE = new HashMap<>();
+    final Map<String, Integer> capCache = new HashMap<>();
+    final List<Holder.Reference<Enchantment>> enchList = new ArrayList<>();
+    final Set<UUID> shulkerOn = new HashSet<>();
+
+    String idOf(Item it) { return idCache.computeIfAbsent(it, k -> BuiltInRegistries.ITEM.getKey(k).toString()); }
+
+    static String idOfStatic(ItemStack st) { return BuiltInRegistries.ITEM.getKey(st.getItem()).toString(); }
+
+    static String nameOf(Item it) {
+        return NAME_CACHE.computeIfAbsent(it, k -> k.getDefaultInstance().getHoverName().getString().toLowerCase(Locale.ROOT));
+    }
+
+    static boolean isShulker(ItemStack st) { return !st.isEmpty() && idOfStatic(st).endsWith("shulker_box"); }
+
+    static void ping(ServerPlayer p, SoundEvent s, float pitch) { p.playNotifySound(s, SoundSource.PLAYERS, 0.8f, pitch); }
+
+    /** Wie oft ein Item gleichzeitig vorkommen darf: teure/seltene Items nur 1-60 mal (Drachenei: 1x). */
+    int cap(String id) {
+        return capCache.computeIfAbsent(id, k -> {
+            long pr = prices.unitPrice(k, Map.of());
+            return pr >= 1_000_000 ? 1 : pr >= 300_000 ? 3 : pr >= 100_000 ? 8 : pr >= 30_000 ? 60 : Integer.MAX_VALUE;
+        });
+    }
+
+    void initEnchants() {
+        enchList.clear();
+        if (srv == null) return;
+        srv.registryAccess().lookupOrThrow(Registries.ENCHANTMENT).listElements().forEach(enchList::add);
+        Set<String> fixed = Set.of("minecraft:protection", "minecraft:sharpness", "minecraft:mending");
+        for (Holder.Reference<Enchantment> h : enchList) {
+            String name = h.getRegisteredName();
+            if (fixed.contains(name)) continue;
+            prices.setEnchantValue(name, h.value().getMaxLevel() <= 1 ? 1_200_000 : 300_000);
         }
     }
 
-    /** Mindestens 500 Bot-Angebote im Auktionshaus. */
+    /** Item mit zufaelligen, passenden Verzauberungen (Buecher: 1-2). null, wenn nicht verzauberbar. */
+    ItemStack randomEnchanted(Item it) {
+        if (enchList.isEmpty()) return null;
+        ItemStack st = new ItemStack(it);
+        boolean book = it == Items.ENCHANTED_BOOK;
+        if (!book && !st.isEnchantable()) return null;
+        List<Holder.Reference<Enchantment>> ok = new ArrayList<>();
+        for (Holder.Reference<Enchantment> h : enchList) if (book || h.value().isSupportedItem(st)) ok.add(h);
+        if (ok.isEmpty()) return null;
+        Collections.shuffle(ok, RND);
+        int n = Math.min(ok.size(), 1 + RND.nextInt(book ? 2 : 4));
+        for (int i = 0; i < n; i++) {
+            Holder.Reference<Enchantment> h = ok.get(i);
+            int max = Math.max(1, h.value().getMaxLevel());
+            int lvl = RND.nextInt(3) == 0 ? max : 1 + RND.nextInt(max);
+            st.enchant(h, lvl);
+        }
+        return st;
+    }
+
+    /** ItemStack aus Item-Id, Verzauberungen und Menge (fuer Anzeige und Lieferungen). */
+    ItemStack buildStack(String itemId, Map<String, Integer> ench, int count) {
+        Item it = ITEM_BY_ID.get(itemId);
+        if (it == null) return ItemStack.EMPTY;
+        ItemStack st = new ItemStack(it, Math.max(1, count));
+        for (Map.Entry<String, Integer> e : ench.entrySet())
+            for (Holder.Reference<Enchantment> h : enchList)
+                if (h.getRegisteredName().equals(e.getKey())) { st.enchant(h, e.getValue()); break; }
+        return st;
+    }
+
+    /** Mindestens MIN_ORDERS Bot-Orders, auch mit Verzauberungen. */
+    void seedOrders() {
+        if (pool.isEmpty()) return;
+        Map<String, Integer> cnt = new HashMap<>();
+        for (Orders.Order o : orders.all()) if (o.enchants.isEmpty()) cnt.merge(o.itemId, 1, Integer::sum);
+        int tries = 0;
+        while (orders.all().size() < MIN_ORDERS && tries++ < MIN_ORDERS * 20) {
+            Item it = pool.get(RND.nextInt(pool.size()));
+            String id = idOf(it);
+            boolean book = it == Items.ENCHANTED_BOOK;
+            ItemStack e = (book || RND.nextInt(4) == 0) ? randomEnchanted(it) : null;
+            if (book && e == null) continue;
+            if (e == null && cnt.getOrDefault(id, 0) >= cap(id)) continue;
+            int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
+            if (e != null) {
+                orders.botOrder(id, toStack(e).enchants(), 1 + RND.nextInt(3), RND);
+            } else {
+                int amt = max > 1 ? 16 + RND.nextInt(max * 3) : 1 + RND.nextInt(3);
+                orders.botOrder(id, Map.of(), amt, RND);
+                cnt.merge(id, 1, Integer::sum);
+            }
+        }
+    }
+
+    /** Mindestens MIN_AH Bot-Angebote, auch mit Verzauberungen. */
     void seedAh() {
         if (pool.isEmpty()) return;
-        while (ah.all().size() < MIN_AH) {
+        Map<String, Integer> cnt = new HashMap<>();
+        for (ItemStack s : ahItems.values()) if (!s.isEnchanted() && s.get(DataComponents.STORED_ENCHANTMENTS) == null) cnt.merge(idOfStatic(s), 1, Integer::sum);
+        int tries = 0;
+        while (ah.all().size() < MIN_AH && tries++ < MIN_AH * 20) {
             Item it = pool.get(RND.nextInt(pool.size()));
-            int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-            addBotListing(new ItemStack(it, max > 1 ? 1 + RND.nextInt(max) : 1));
+            String id = idOf(it);
+            boolean book = it == Items.ENCHANTED_BOOK;
+            ItemStack e = (book || RND.nextInt(4) == 0) ? randomEnchanted(it) : null;
+            if (book && e == null) continue;
+            if (e == null && cnt.getOrDefault(id, 0) >= cap(id)) continue;
+            if (e != null) {
+                addBotListing(e);
+            } else {
+                int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
+                addBotListing(new ItemStack(it, max > 1 ? 1 + RND.nextInt(max) : 1));
+                cnt.merge(id, 1, Integer::sum);
+            }
         }
     }
 
@@ -202,20 +309,29 @@ public class DonutMod implements ModInitializer {
             ItemStack st = ahItems.remove(l.id);
             if (l.seller != null) {
                 ServerPlayer p = server.getPlayerList().getPlayer(l.seller);
-                if (p != null) p.sendSystemMessage(Component.literal("§a[AH] Dein Angebot #" + l.id
-                        + (st != null ? " (" + st.getHoverName().getString() + ")" : "") + " wurde fuer $" + fmt(l.price) + " verkauft."));
+                if (p != null) {
+                    p.sendSystemMessage(Component.literal("§a[AH] Dein Angebot #" + l.id
+                            + (st != null ? " (" + st.getHoverName().getString() + ")" : "") + " wurde fuer $" + fmt(l.price) + " verkauft."));
+                    ping(p, SoundEvents.PLAYER_LEVELUP, 1.0f);
+                }
             }
         }
         for (Orders.Order o : new ArrayList<>(orders.all())) {
-            if (o.owner == null) continue;
-            Item it = ITEM_BY_ID.get(o.itemId);
-            if (it == null) continue;
-            double ratio = o.pricePerItem / Math.max(1.0, (double) prices.sellUnitPrice(o.itemId, Map.of()));
+            if (o.owner == null) {
+                // Bot-Orders fuellen sich langsam von selbst
+                if (RND.nextDouble() < BOT_ORDER_FILL) {
+                    int n = Math.max(1, (int) Math.ceil(o.remaining * (0.1 + RND.nextDouble() * 0.3)));
+                    orders.botDeliver(o, n);
+                }
+                continue;
+            }
+            if (!ITEM_BY_ID.containsKey(o.itemId)) continue;
+            double ratio = o.pricePerItem / Math.max(1.0, (double) prices.sellUnitPrice(o.itemId, o.enchants));
             double chance = Math.min(0.8, 0.05 * Math.pow(ratio, 3));
             if (RND.nextDouble() < chance) {
                 int n = Math.max(1, (int) Math.ceil(o.remaining * (0.1 + RND.nextDouble() * 0.4)));
                 int d = orders.botDeliver(o, n);
-                if (d > 0) addPending(o.owner, new ItemStack(it, d));
+                if (d > 0) addPending(o.owner, buildStack(o.itemId, o.enchants, d));
             }
         }
         seedAh();
@@ -235,6 +351,7 @@ public class DonutMod implements ModInitializer {
             ServerPlayer p = srv.getPlayerList().getPlayer(owner);
             if (p != null) p.sendSystemMessage(Component.literal("§a[Orders] Lieferung: " + st.getCount() + "x "
                     + st.getHoverName().getString() + " - hole sie mit /orders claim ab."));
+            if (p != null) ping(p, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.3f);
         }
     }
 
@@ -244,13 +361,7 @@ public class DonutMod implements ModInitializer {
         return n;
     }
 
-    void claim(ServerPlayer p) {
-        List<ItemStack> l = pending.remove(p.getUUID());
-        if (l == null || l.isEmpty()) { Gui.say(p, "§7Nichts zum Abholen."); return; }
-        int n = 0;
-        for (ItemStack s : l) { n += s.getCount(); p.getInventory().placeItemBackInInventory(s); }
-        Gui.say(p, "§aAbgeholt: " + n + " Items.");
-    }
+    void claim(ServerPlayer p) { Gui.openStorage(this, p); }
 
     /** Beim Beenden: offene Spieler-Orders zurueckzahlen, damit kein Geld verloren geht. */
     void refundOrders() {
@@ -261,11 +372,20 @@ public class DonutMod implements ModInitializer {
     static Stack toStack(ItemStack st) {
         String id = BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
         Map<String, Integer> ench = new HashMap<>();
-        ItemEnchantments ie = st.get(DataComponents.ENCHANTMENTS);
-        if (ie != null)
-            for (Object2IntMap.Entry<net.minecraft.core.Holder<net.minecraft.world.item.enchantment.Enchantment>> e : ie.entrySet())
-                ench.put(e.getKey().getRegisteredName(), e.getIntValue());
+        for (ItemEnchantments ie : new ItemEnchantments[]{st.get(DataComponents.ENCHANTMENTS), st.get(DataComponents.STORED_ENCHANTMENTS)})
+            if (ie != null)
+                for (Object2IntMap.Entry<net.minecraft.core.Holder<net.minecraft.world.item.enchantment.Enchantment>> e : ie.entrySet())
+                    ench.merge(e.getKey().getRegisteredName(), e.getIntValue(), Math::max);
         return new Stack(id, st.getCount(), ench);
+    }
+
+    /** Fuegt den Stack und - bei Shulkern - auch seinen Inhalt zur Verkaufsliste hinzu. */
+    static void addStacks(ItemStack st, List<Stack> out) {
+        out.add(toStack(st));
+        if (isShulker(st)) {
+            ItemContainerContents cc = st.get(DataComponents.CONTAINER);
+            if (cc != null) for (ItemStack in : cc.nonEmptyItems()) if (!in.isEmpty()) out.add(toStack(in));
+        }
     }
 
     /** Betrag mit k/m/b/t-Endung, z.B. 500, 1.5k, 2m. Rueckgabe -1 bei Fehler. */
@@ -293,7 +413,9 @@ public class DonutMod implements ModInitializer {
                 .then(Commands.literal("preview").executes(c -> {
                     ServerPlayer p = c.getSource().getPlayerOrException();
                     ItemStack h = p.getMainHandItem();
-                    long v = h.isEmpty() ? 0 : sell.preview(List.of(toStack(h)));
+                    List<Stack> pv = new ArrayList<>();
+                    if (!h.isEmpty()) addStacks(h, pv);
+                    long v = pv.isEmpty() ? 0 : sell.preview(pv);
                     return msg(c, "§eVorschau: §a$" + fmt(v));
                 })));
 
@@ -321,25 +443,15 @@ public class DonutMod implements ModInitializer {
             return msg(c, sb.toString());
         }));
 
-        d.register(Commands.literal("orders")
-                .executes(c -> { Gui.openOrders(this, c.getSource().getPlayerOrException()); return 1; })
-                .then(Commands.literal("claim").executes(c -> { claim(c.getSource().getPlayerOrException()); return 1; }))
-                .then(Commands.literal("create").then(Commands.argument("menge", IntegerArgumentType.integer(1, 100000))
-                        .then(Commands.argument("preis", LongArgumentType.longArg(1)).executes(c -> {
-                            ServerPlayer p = c.getSource().getPlayerOrException();
-                            ItemStack h = p.getMainHandItem();
-                            if (h.isEmpty()) return msg(c, "§cNimm das gewünschte Item in die Hand.");
-                            int amount = IntegerArgumentType.getInteger(c, "menge");
-                            long ppi = LongArgumentType.getLong(c, "preis");
-                            String id = BuiltInRegistries.ITEM.getKey(h.getItem()).toString();
-                            Orders.Order o = orders.playerOrder(p.getUUID(), id, Map.of(), amount, ppi);
-                            if (o == null) return msg(c, "§cNicht genug Geld. Du brauchst $" + fmt(ppi * amount) + ".");
-                            return msg(c, "§aOrder #" + o.id + " erstellt: " + amount + "x " + h.getHoverName().getString()
-                                    + " für je $" + fmt(ppi) + " (bezahlt: $" + fmt(ppi * amount) + ")");
-                        })))));
+        d.register(ordersCmd("orders"));
+        d.register(ordersCmd("order"));
 
         d.register(Commands.literal("ah")
-                .executes(c -> { Gui.openAh(this, c.getSource().getPlayerOrException()); return 1; })
+                .executes(c -> { Gui.openAh(this, c.getSource().getPlayerOrException(), ""); return 1; })
+                .then(Commands.argument("suche", StringArgumentType.greedyString()).executes(c -> {
+                    Gui.openAh(this, c.getSource().getPlayerOrException(), StringArgumentType.getString(c, "suche"));
+                    return 1;
+                }))
                 .then(Commands.literal("sell").then(Commands.argument("preis", LongArgumentType.longArg(1))
                         .executes(c -> {
                             ServerPlayer p = c.getSource().getPlayerOrException();
@@ -364,22 +476,47 @@ public class DonutMod implements ModInitializer {
                         }))));
     }
 
+    LiteralArgumentBuilder<CommandSourceStack> ordersCmd(String name) {
+        return Commands.literal(name)
+                .executes(c -> { Gui.openOrders(this, c.getSource().getPlayerOrException(), ""); return 1; })
+                .then(Commands.literal("claim").executes(c -> { claim(c.getSource().getPlayerOrException()); return 1; }))
+                .then(Commands.literal("create").then(Commands.argument("menge", IntegerArgumentType.integer(1, 100000))
+                        .then(Commands.argument("preis", LongArgumentType.longArg(1)).executes(c -> {
+                            ServerPlayer p = c.getSource().getPlayerOrException();
+                            ItemStack h = p.getMainHandItem();
+                            if (h.isEmpty()) return msg(c, "§cNimm das gewünschte Item in die Hand.");
+                            int amount = IntegerArgumentType.getInteger(c, "menge");
+                            long ppi = LongArgumentType.getLong(c, "preis");
+                            String id = BuiltInRegistries.ITEM.getKey(h.getItem()).toString();
+                            Orders.Order o = orders.playerOrder(p.getUUID(), id, toStack(h).enchants(), amount, ppi);
+                            if (o == null) return msg(c, "§cNicht genug Geld. Du brauchst $" + fmt(ppi * amount) + ".");
+                            return msg(c, "§aOrder #" + o.id + " erstellt: " + amount + "x " + h.getHoverName().getString()
+                                    + " für je $" + fmt(ppi) + " (bezahlt: $" + fmt(ppi * amount) + ")");
+                        }))))
+                .then(Commands.argument("suche", StringArgumentType.greedyString()).executes(c -> {
+                    Gui.openOrders(this, c.getSource().getPlayerOrException(), StringArgumentType.getString(c, "suche"));
+                    return 1;
+                }));
+    }
+
     int doSell(CommandContext<CommandSourceStack> c, boolean all) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
         ServerPlayer p = c.getSource().getPlayerOrException();
         List<Stack> stacks = new ArrayList<>();
         if (all) {
+            // nur Inventar + Hotbar (Slots 0-35), keine Ruestung und keine Zweithand
             var inv = p.getInventory();
-            for (int i = 0; i < inv.getContainerSize(); i++) {
+            for (int i = 0; i < 36; i++) {
                 ItemStack st = inv.getItem(i);
-                if (!st.isEmpty()) { stacks.add(toStack(st)); inv.setItem(i, ItemStack.EMPTY); }
+                if (!st.isEmpty()) { addStacks(st, stacks); inv.setItem(i, ItemStack.EMPTY); }
             }
         } else {
             ItemStack h = p.getMainHandItem();
-            if (!h.isEmpty()) { stacks.add(toStack(h)); p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY); }
+            if (!h.isEmpty()) { addStacks(h, stacks); p.setItemInHand(InteractionHand.MAIN_HAND, ItemStack.EMPTY); }
         }
         if (stacks.isEmpty()) return msg(c, "§cNichts zu verkaufen.");
         long pay = sell.sell(p.getUUID(), stacks).payout();
-        return msg(c, "§aVerkauft fuer $" + fmt(pay) + " §7| Kontostand: $" + fmt(eco.get(p.getUUID())));
+        ping(p, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.0f);
+        return msg(c, "§aVerkauft für $" + fmt(pay) + " §7| Kontostand: $" + fmt(eco.get(p.getUUID())));
     }
 
     static int msg(CommandContext<CommandSourceStack> c, String s) {

@@ -6,6 +6,7 @@ import de.donutmod.core.Stack;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvents;
 import net.minecraft.world.Container;
 import net.minecraft.world.SimpleContainer;
 import net.minecraft.world.SimpleMenuProvider;
@@ -17,12 +18,18 @@ import net.minecraft.world.inventory.MenuType;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.item.component.ItemContainerContents;
 import net.minecraft.world.item.component.ItemLore;
 
 import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
+import java.util.IdentityHashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
@@ -31,7 +38,7 @@ import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-/** Kisten-Menues (Sell, Orders, Auktionshaus) - rein serverseitig, kein Client-Mod noetig. */
+/** Kisten-Menues (Sell, Orders, Auktionshaus, Lager) - rein serverseitig, kein Client-Mod noetig. */
 public final class Gui {
     private Gui() {}
 
@@ -61,6 +68,16 @@ public final class Gui {
 
     static ItemStack pane() { return named(Items.GRAY_STAINED_GLASS_PANE, " "); }
 
+    /** Suche: Teil des Item-Ids, des Anzeigenamens oder einer Verzauberung (z.B. "tnt", "sharp"). */
+    static boolean matches(String q, String id, Collection<String> ench, Item item) {
+        if (q.isEmpty()) return true;
+        String p = id.substring(id.indexOf(':') + 1);
+        String u = q.replace(' ', '_');
+        if (p.contains(u)) return true;
+        for (String e : ench) if (e.contains(u)) return true;
+        return item != null && DonutMod.nameOf(item).contains(q);
+    }
+
     // ---------- Menue, das Klicks selbst behandelt ----------
     static class Menu extends ChestMenu {
         final boolean locked;
@@ -82,7 +99,7 @@ public final class Gui {
             if (locked || (top && special.contains(slot))) {
                 if (top && (type == ClickType.PICKUP || type == ClickType.QUICK_MOVE))
                     handler.accept(slot, (ServerPlayer) player);
-                sendAllDataToRemote();
+                if (player.containerMenu == this) sendAllDataToRemote();
                 return;
             }
             super.clicked(slot, button, type, player);
@@ -101,7 +118,7 @@ public final class Gui {
         }
     }
 
-    // ---------- Seitenliste (AH, Orders) ----------
+    // ---------- Seitenliste ----------
     static final class ListGui<T> {
         final DonutMod m; final ServerPlayer p; final String title;
         final Supplier<List<T>> source; final Function<T, ItemStack> display; final BiConsumer<T, ServerPlayer> onClick;
@@ -119,6 +136,12 @@ public final class Gui {
         void extra(int slot, Supplier<ItemStack> icon, Runnable act) { icons.put(slot, icon); acts.put(slot, act); }
 
         int pages() { return Math.max(1, (view.size() + 44) / 45); }
+        int jump() { return Math.max(10, pages() / 20); }
+
+        List<T> pageItems() {
+            int from = Math.min(view.size(), page * 45);
+            return new ArrayList<>(view.subList(from, Math.min(view.size(), from + 45)));
+        }
 
         void render() {
             view = source.get();
@@ -131,8 +154,8 @@ public final class Gui {
             if (page > 0) box.setItem(45, named(Items.ARROW, "§eVorherige Seite", "§7Seite " + page + "/" + pages()));
             if (page < pages() - 1) box.setItem(53, named(Items.ARROW, "§eNächste Seite", "§7Seite " + (page + 2) + "/" + pages()));
             if (pages() > 10) {
-                box.setItem(46, named(Items.SPECTRAL_ARROW, "§e-10 Seiten"));
-                box.setItem(52, named(Items.SPECTRAL_ARROW, "§e+10 Seiten"));
+                box.setItem(46, named(Items.SPECTRAL_ARROW, "§e-" + jump() + " Seiten"));
+                box.setItem(52, named(Items.SPECTRAL_ARROW, "§e+" + jump() + " Seiten"));
             }
             box.setItem(49, named(Items.GOLD_INGOT, "§6Dein Geld: §a$" + DonutMod.fmt(m.eco.get(p.getUUID())),
                     "§7Seite " + (page + 1) + "/" + pages(), "§7Einträge: §f" + view.size()));
@@ -143,11 +166,11 @@ public final class Gui {
             if (slot < 45) {
                 int idx = page * 45 + slot;
                 if (idx < view.size()) onClick.accept(view.get(idx), pl);
-            } else if (slot == 45 && page > 0) page--;
+            } else if (acts.containsKey(slot)) acts.get(slot).run();
+            else if (slot == 45 && page > 0) page--;
             else if (slot == 53 && page < pages() - 1) page++;
-            else if (slot == 46 && pages() > 10) page = Math.max(0, page - 10);
-            else if (slot == 52 && pages() > 10) page = Math.min(pages() - 1, page + 10);
-            else if (acts.containsKey(slot)) acts.get(slot).run();
+            else if (slot == 46 && pages() > 10) page = Math.max(0, page - jump());
+            else if (slot == 52 && pages() > 10) page = Math.min(pages() - 1, page + jump());
             render();
         }
 
@@ -160,13 +183,18 @@ public final class Gui {
     }
 
     // ---------- Auktionshaus ----------
-    static void openAh(DonutMod m, ServerPlayer p) {
+    static void openAh(DonutMod m, ServerPlayer p) { openAh(m, p, ""); }
+
+    static void openAh(DonutMod m, ServerPlayer p, String search) {
         int[] st = {0, 0}; // [0] Sortierung, [1] 1 = nur meine Angebote
+        String[] q = {search.trim().toLowerCase(Locale.ROOT)};
         String[] sortNames = {"Neueste zuerst", "Günstigste zuerst", "Teuerste zuerst", "Nach Item-Name"};
-        ListGui<AuctionHouse.Listing> g = new ListGui<>(m, p, "Auktionshaus",
+        ListGui<AuctionHouse.Listing> g = new ListGui<>(m, p, q[0].isEmpty() ? "Auktionshaus" : "Auktionshaus: " + q[0],
                 () -> {
                     List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
                     if (st[1] == 1) l.removeIf(x -> !p.getUUID().equals(x.seller));
+                    if (!q[0].isEmpty())
+                        l.removeIf(x -> !matches(q[0], x.stack.id(), x.stack.enchants().keySet(), DonutMod.ITEM_BY_ID.get(x.stack.id())));
                     switch (st[0]) {
                         case 0 -> l.sort(Comparator.comparingInt((AuctionHouse.Listing x) -> x.id).reversed());
                         case 1 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price));
@@ -195,24 +223,32 @@ public final class Gui {
                     if (!m.ah.buy(pl.getUUID(), l)) { say(pl, "§cNicht genug Geld oder schon verkauft."); return; }
                     ItemStack it = m.ahItems.remove(l.id);
                     if (it != null) pl.getInventory().placeItemBackInInventory(it);
+                    DonutMod.ping(pl, SoundEvents.VILLAGER_YES, 1.0f);
                     say(pl, "§aGekauft für $" + DonutMod.fmt(l.price));
                 });
         g.extra(47, () -> named(Items.HOPPER, "§eSortierung", "§7Aktuell: §f" + sortNames[st[0]], "§7Klick: nächste Sortierung"),
                 () -> st[0] = (st[0] + 1) % 4);
+        g.extra(48, () -> q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
+                () -> { q[0] = ""; g.page = 0; });
         g.extra(51, () -> st[1] == 0
-                        ? named(Items.CHEST, "§bMeine Angebote", "§7Klick: nur deine Angebote zeigen")
+                        ? named(Items.CHEST, "§bMeine Angebote", "§7Klick: nur deine Angebote zeigen", "§7Suche: §f/ah <Name>")
                         : named(Items.BARRIER, "§cZurück", "§7Klick: alle Angebote zeigen"),
                 () -> { st[1] = 1 - st[1]; g.page = 0; });
         g.open();
     }
 
     // ---------- Orders ----------
-    static void openOrders(DonutMod m, ServerPlayer p) {
+    static void openOrders(DonutMod m, ServerPlayer p) { openOrders(m, p, ""); }
+
+    static void openOrders(DonutMod m, ServerPlayer p, String search) {
         boolean[] mine = {false};
-        ListGui<Orders.Order> g = new ListGui<>(m, p, "Orders",
+        String[] q = {search.trim().toLowerCase(Locale.ROOT)};
+        ListGui<Orders.Order> g = new ListGui<>(m, p, q[0].isEmpty() ? "Orders" : "Orders: " + q[0],
                 () -> {
                     List<Orders.Order> l = new ArrayList<>(m.orders.all());
                     if (mine[0]) l.removeIf(o -> !p.getUUID().equals(o.owner));
+                    if (!q[0].isEmpty())
+                        l.removeIf(o -> !matches(q[0], o.itemId, o.enchants.keySet(), DonutMod.ITEM_BY_ID.get(o.itemId)));
                     l.sort(Comparator.comparingLong((Orders.Order o) -> o.pricePerItem).reversed());
                     return l;
                 },
@@ -221,7 +257,8 @@ public final class Gui {
                     if (it == null) return named(Items.BARRIER, "§cUnbekanntes Item");
                     boolean own = p.getUUID().equals(o.owner);
                     int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-                    return withLore(new ItemStack(it, Math.max(1, Math.min(o.remaining, max))),
+                    ItemStack base = m.buildStack(o.itemId, o.enchants, Math.max(1, Math.min(o.remaining, max)));
+                    return withLore(base,
                             "§7Zahlt: §a$" + DonutMod.fmt(o.pricePerItem) + " §7pro Stück",
                             "§7Gesucht: §f" + o.remaining + " Stück",
                             "§7Gesamt: §a$" + DonutMod.fmt(o.pricePerItem * o.remaining),
@@ -232,12 +269,23 @@ public final class Gui {
         g.extra(47, () -> mine[0]
                         ? named(Items.BARRIER, "§cAlle Orders", "§7Klick: alle Orders zeigen")
                         : named(Items.CHEST, "§bMeine Orders", "§7Klick: nur deine Orders zeigen", "",
-                                "§7Neue Order: §f/orders create <Menge> <Preis>", "§7(Item in der Hand, Preis pro Stück)"),
+                                "§7Neue Order: §f/order create <Menge> <Preis>", "§7(Item in der Hand, Preis pro Stück)",
+                                "§7Suche: §f/order <Name>"),
                 () -> { mine[0] = !mine[0]; g.page = 0; });
+        g.extra(48, () -> q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
+                () -> { q[0] = ""; g.page = 0; });
         g.extra(51, () -> named(Items.ENDER_CHEST, "§dAbholen",
-                        "§7Gelieferte Items: §f" + m.pendingCount(p.getUUID()), "§7Klick: ins Inventar holen"),
-                () -> m.claim(p));
+                        "§7Gelieferte Items: §f" + m.pendingCount(p.getUUID()), "§7Klick: Lager öffnen"),
+                () -> openStorage(m, p));
         g.open();
+    }
+
+    static boolean satisfies(ItemStack s, Map<String, Integer> need) {
+        if (need.isEmpty()) return true;
+        Map<String, Integer> have = DonutMod.toStack(s).enchants();
+        for (Map.Entry<String, Integer> e : need.entrySet())
+            if (have.getOrDefault(e.getKey(), 0) < e.getValue()) return false;
+        return true;
     }
 
     static void deliver(DonutMod m, ServerPlayer pl, Orders.Order o) {
@@ -248,23 +296,151 @@ public final class Gui {
         }
         Item it = DonutMod.ITEM_BY_ID.get(o.itemId);
         if (it == null) return;
-        if (!o.enchants.isEmpty()) { say(pl, "§cDiese Order braucht verzauberte Items."); return; }
         Inventory inv = pl.getInventory();
         int need = o.remaining, got = 0;
+        List<ItemStack> taken = new ArrayList<>();
         for (int i = 0; i < 36 && got < need; i++) {
             ItemStack s = inv.getItem(i);
-            if (!s.isEmpty() && s.getItem() == it) {
+            if (!s.isEmpty() && s.getItem() == it && satisfies(s, o.enchants)) {
                 int take = Math.min(s.getCount(), need - got);
+                taken.add(s.copyWithCount(take));
                 s.shrink(take);
                 got += take;
                 if (s.isEmpty()) inv.setItem(i, ItemStack.EMPTY);
             }
         }
-        if (got == 0) { say(pl, "§cDu hast dieses Item nicht im Inventar."); return; }
+        if (got == 0) { say(pl, "§cDu hast dazu passende Items nicht im Inventar."); return; }
         UUID owner = o.owner;
-        long pay = m.orders.fill(o, new Stack(o.itemId, got), pl.getUUID());
-        if (owner != null) m.addPending(owner, new ItemStack(it, got));
+        long pay = m.orders.fill(o, new Stack(o.itemId, got, o.enchants), pl.getUUID());
+        if (owner != null) for (ItemStack c : taken) m.addPending(owner, c);
+        DonutMod.ping(pl, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.2f);
         say(pl, "§aGeliefert: " + got + "x für $" + DonutMod.fmt(pay));
+    }
+
+    // ---------- Lager (gelieferte Order-Items) ----------
+    static final class Group {
+        final String id; final Item item; int count, stacks;
+        Group(String id, Item item) { this.id = id; this.item = item; }
+    }
+
+    static List<Group> groups(DonutMod m, UUID u) {
+        Map<String, Group> map = new LinkedHashMap<>();
+        for (ItemStack s : m.pending.getOrDefault(u, List.of())) {
+            String id = DonutMod.idOfStatic(s);
+            Group g = map.computeIfAbsent(id, k -> new Group(k, s.getItem()));
+            g.count += s.getCount();
+            g.stacks++;
+        }
+        return new ArrayList<>(map.values());
+    }
+
+    static List<ItemStack> stacksOf(DonutMod m, UUID u, String id) {
+        List<ItemStack> r = new ArrayList<>();
+        for (ItemStack s : m.pending.getOrDefault(u, List.of())) if (DonutMod.idOfStatic(s).equals(id)) r.add(s);
+        return r;
+    }
+
+    static void openStorage(DonutMod m, ServerPlayer p) {
+        ListGui<Group> g = new ListGui<>(m, p, "Lager - gelieferte Items",
+                () -> groups(m, p.getUUID()),
+                gr -> withLore(new ItemStack(gr.item, Math.max(1, Math.min(gr.count, 64))),
+                        "§7Gelagert: §f" + gr.count + " Items", "§7Stacks: §f" + gr.stacks, "", "§aKlick: Items ansehen"),
+                (gr, pl) -> openGroup(m, pl, gr.id));
+        g.extra(52, () -> named(Items.ARROW, "§eZurück zu Orders"), () -> openOrders(m, p));
+        g.open();
+    }
+
+    static void openGroup(DonutMod m, ServerPlayer p, String itemId) {
+        UUID u = p.getUUID();
+        boolean shulkerGroup = itemId.endsWith("shulker_box");
+        ListGui<ItemStack> g = new ListGui<>(m, p, "Lager: " + itemId.substring(itemId.indexOf(':') + 1).replace('_', ' '),
+                () -> stacksOf(m, u, itemId),
+                s -> withLore(s, "§7Menge: §f" + s.getCount(), "", "§aKlick / Shift-Klick: ins Inventar"),
+                (s, pl) -> takeOne(m, pl, s));
+        g.extra(47, () -> named(Items.DROPPER, "§6Seite droppen", "§7Wirft diese Seite auf den Boden"),
+                () -> dropOrFill(m, p, g.pageItems(), true));
+        g.extra(48, () -> named(Items.TNT, "§cAlles droppen", "§7Wirft alle Stacks dieses Items auf den Boden"),
+                () -> dropOrFill(m, p, new ArrayList<>(g.view), true));
+        g.extra(50, () -> named(Items.HOPPER, "§aInventar füllen", "§7Füllt dein Inventar, solange Platz ist"),
+                () -> dropOrFill(m, p, new ArrayList<>(g.view), false));
+        if (!shulkerGroup)
+            g.extra(51, () -> m.shulkerOn.contains(u)
+                            ? named(Items.LIME_DYE, "§dIn Shulker: §aAN", "§7Droppen/Füllen packt die Items in",
+                                    "§7leere Shulker aus deinem Inventar", "§7Klick: ausschalten")
+                            : named(Items.GRAY_DYE, "§dIn Shulker: §cAUS", "§7Klick: einschalten"),
+                    () -> { if (!m.shulkerOn.remove(u)) m.shulkerOn.add(u); });
+        g.extra(52, () -> named(Items.ARROW, "§eZurück"), () -> openStorage(m, p));
+        g.open();
+    }
+
+    static void takeOne(DonutMod m, ServerPlayer pl, ItemStack s) {
+        List<ItemStack> list = m.pending.get(pl.getUUID());
+        if (list == null) return;
+        ItemStack c = s.copy();
+        pl.getInventory().add(c);
+        if (c.isEmpty()) list.remove(s); else if (c.getCount() == s.getCount()) say(pl, "§cInventar voll."); else s.setCount(c.getCount());
+        if (list.isEmpty()) m.pending.remove(pl.getUUID());
+    }
+
+    static boolean isEmptyShulker(ItemStack s) {
+        if (!DonutMod.isShulker(s)) return false;
+        ItemContainerContents cc = s.get(DataComponents.CONTAINER);
+        return cc == null || cc.equals(ItemContainerContents.EMPTY);
+    }
+
+    /** Packt je 27 Stacks in einen leeren Shulker aus dem Inventar des Spielers. */
+    static void packShulkers(ServerPlayer p, List<ItemStack> src, List<ItemStack> out, List<ItemStack> used) {
+        Inventory inv = p.getInventory();
+        int idx = 0;
+        while (idx < src.size()) {
+            int slot = -1;
+            for (int i = 0; i < 36; i++) if (isEmptyShulker(inv.getItem(i))) { slot = i; break; }
+            if (slot < 0) break;
+            ItemStack box = inv.getItem(slot).copy();
+            inv.setItem(slot, ItemStack.EMPTY);
+            List<ItemStack> chunk = new ArrayList<>();
+            for (int k = 0; k < 27 && idx < src.size(); k++, idx++) {
+                chunk.add(src.get(idx).copy());
+                used.add(src.get(idx));
+            }
+            box.set(DataComponents.CONTAINER, ItemContainerContents.fromItems(chunk));
+            out.add(box);
+        }
+    }
+
+    static void dropOrFill(DonutMod m, ServerPlayer p, List<ItemStack> sel, boolean drop) {
+        if (sel.isEmpty()) { say(p, "§7Nichts da."); return; }
+        List<ItemStack> list = m.pending.get(p.getUUID());
+        if (list == null) return;
+        boolean sh = m.shulkerOn.contains(p.getUUID()) && !DonutMod.isShulker(sel.get(0));
+        int moved = 0;
+        if (sh) {
+            List<ItemStack> out = new ArrayList<>(), used = new ArrayList<>();
+            packShulkers(p, sel, out, used);
+            if (used.isEmpty()) { say(p, "§cKeine leeren Shulker im Inventar."); return; }
+            for (ItemStack u : used) moved += u.getCount();
+            Set<ItemStack> ident = Collections.newSetFromMap(new IdentityHashMap<>());
+            ident.addAll(used);
+            list.removeIf(ident::contains);
+            for (ItemStack o : out) {
+                if (drop) p.drop(o, false);
+                else { p.getInventory().add(o); if (!o.isEmpty()) p.drop(o, false); }
+            }
+        } else if (drop) {
+            Set<ItemStack> ident = Collections.newSetFromMap(new IdentityHashMap<>());
+            ident.addAll(sel);
+            for (ItemStack s : sel) { moved += s.getCount(); p.drop(s.copy(), false); }
+            list.removeIf(ident::contains);
+        } else {
+            for (ItemStack s : sel) {
+                ItemStack c = s.copy();
+                p.getInventory().add(c);
+                moved += s.getCount() - c.getCount();
+                if (c.isEmpty()) list.remove(s); else { s.setCount(c.getCount()); break; }
+            }
+        }
+        if (list.isEmpty()) m.pending.remove(p.getUUID());
+        say(p, "§a" + moved + " Items " + (drop ? "gedroppt" : "ins Inventar gelegt") + (sh ? " (in Shulkern)." : "."));
     }
 
     // ---------- Sell ----------
@@ -283,7 +459,7 @@ public final class Gui {
         List<Stack> list = new ArrayList<>();
         for (int i = 0; i < 53; i++) {
             ItemStack s = box.getItem(i);
-            if (!s.isEmpty()) list.add(DonutMod.toStack(s));
+            if (!s.isEmpty()) DonutMod.addStacks(s, list);
         }
         return list;
     }
@@ -292,7 +468,7 @@ public final class Gui {
         List<Stack> list = collect(box);
         long v = list.isEmpty() ? 0 : m.sell.preview(list);
         return named(Items.LIME_STAINED_GLASS_PANE, "§aVerkaufen: $" + DonutMod.fmt(v),
-                "§7Klick hier oder schließe das Menü.");
+                "§7Klick hier oder schließe das Menü.", "§7Shulker: Inhalt zählt mit.");
     }
 
     static void sellAll(DonutMod m, SimpleContainer box, ServerPlayer p) {
@@ -300,6 +476,7 @@ public final class Gui {
         for (int i = 0; i < 53; i++) box.setItem(i, ItemStack.EMPTY);
         if (list.isEmpty()) return;
         long pay = m.sell.sell(p.getUUID(), list).payout();
+        DonutMod.ping(p, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.0f);
         say(p, "§aVerkauft für $" + DonutMod.fmt(pay) + " §7| Kontostand: $" + DonutMod.fmt(m.eco.get(p.getUUID())));
     }
 }
