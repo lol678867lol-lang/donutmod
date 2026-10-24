@@ -70,4 +70,17 @@ public class Orders {
         Order o = bestFor(s);
         return o != null ? o.pricePerItem : prices.unitPrice(s);
     }
+    /** Spieler-Order abbrechen: Restbetrag wird zurueckgezahlt. */
+    public boolean cancel(Order o) {
+        if (!orders.remove(o)) return false;
+        if (o.owner != null) eco.add(o.owner, o.pricePerItem * o.remaining);
+        return true;
+    }
+    /** Bots liefern n Items in eine Spieler-Order (Geld lag schon im Escrow). Rueckgabe: wirklich geliefert. */
+    public int botDeliver(Order o, int n) {
+        int d = Math.min(n, o.remaining);
+        o.remaining -= d;
+        if (o.remaining <= 0) orders.remove(o);
+        return d;
+    }
 }

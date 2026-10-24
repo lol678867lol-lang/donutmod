@@ -57,4 +57,6 @@ public class AuctionHouse {
         listings.remove(l);
         return true;
     }
+    /** Angebot zurueckziehen (Verkaeufer holt sein Item zurueck). */
+    public boolean cancel(Listing l) { return listings.remove(l); }
 }
