@@ -5,6 +5,20 @@ version = project.mod_version
 group = 'de.donutmod'
 base { archivesName = 'donutmod' }
 
+sourceSets {
+    main {
+        java {
+            srcDir '.'
+            include '**/*.java'
+            exclude 'build/**', '.gradle/**'
+        }
+        resources {
+            srcDir '.'
+            include 'fabric.mod.json'
+        }
+    }
+}
+
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
     mappings loom.officialMojangMappings()
