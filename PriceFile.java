@@ -21,7 +21,18 @@ import java.util.TreeMap;
  * Die Datei kann man von Hand aendern. Zum Neu-Erzeugen: Datei loeschen.
  */
 public class PriceFile {
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices.json"); }
+    /** Alle Basis-Preise werden damit multipliziert (DonutSMP-artiges Preisniveau). Zum Anpassen hier aendern. */
+    static final long MULT = 40;
+    /** Premium-Items mit festen Preisen (nicht multipliziert). */
+    static final Map<String, Long> HIGH = Map.ofEntries(
+            Map.entry("minecraft:mace", 2_500_000L), Map.entry("minecraft:elytra", 1_500_000L),
+            Map.entry("minecraft:totem_of_undying", 800_000L), Map.entry("minecraft:heavy_core", 1_000_000L),
+            Map.entry("minecraft:nether_star", 1_500_000L), Map.entry("minecraft:beacon", 2_500_000L),
+            Map.entry("minecraft:enchanted_golden_apple", 1_000_000L), Map.entry("minecraft:trident", 600_000L),
+            Map.entry("minecraft:dragon_egg", 5_000_000L),
+            Map.entry("minecraft:netherite_upgrade_smithing_template", 400_000L));
+
+    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v2.json"); }
 
     public static void loadInto(PriceBook prices) {
         try {
@@ -39,7 +50,8 @@ public class PriceFile {
             String id = BuiltInRegistries.ITEM.getKey(item).toString();
             if (id.equals("minecraft:air")) continue;
             Long k = known.get(id);
-            out.put(id, k != null ? k : estimate(item, id));
+            Long hi = HIGH.get(id);
+            out.put(id, hi != null ? hi : (k != null ? k : estimate(item, id)) * MULT);
         }
         Files.writeString(file(), new GsonBuilder().setPrettyPrinting().create().toJson(out));
     }
