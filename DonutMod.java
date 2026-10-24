@@ -57,15 +57,29 @@ public class DonutMod implements ModInitializer {
     static final Gson GSON = new Gson();
     static Path saveFile() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-balances.json"); }
 
+    static final Object[][] KNOWN = {
+            {"kelp",50},{"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
+            {"string",90},{"spider_eye",70},{"rotten_flesh",20},{"gunpowder",120},{"ender_pearl",400},{"blaze_rod",250},
+            {"coal",60},{"charcoal",50},{"iron_ingot",80},{"gold_ingot",120},{"copper_ingot",30},{"diamond",500},
+            {"emerald",350},{"lapis_lazuli",60},{"redstone",40},{"quartz",70},{"amethyst_shard",90},
+            {"netherite_scrap",1500},{"netherite_ingot",5000},{"ancient_debris",2500},{"iron_block",720},
+            {"gold_block",1080},{"diamond_block",4500},{"emerald_block",3150},{"netherite_block",45000},
+            {"cobblestone",5},{"stone",8},{"deepslate",8},{"obsidian",150},{"crying_obsidian",300},{"glowstone",110},
+            {"oak_log",20},{"spruce_log",20},{"birch_log",20},{"sand",10},{"gravel",10},{"dirt",3},
+            {"wheat",25},{"carrot",25},{"potato",25},{"melon_slice",15},{"pumpkin",40},{"sugar_cane",30},
+            {"sweet_berries",20},{"golden_apple",900},{"enchanted_golden_apple",25000},{"cooked_beef",80},
+            {"diamond_sword",2500},{"diamond_pickaxe",3000},{"diamond_axe",3000},{"diamond_shovel",1500},
+            {"diamond_helmet",3500},{"diamond_chestplate",5600},{"diamond_leggings",5000},{"diamond_boots",2900},
+            {"netherite_sword",9000},{"netherite_pickaxe",9500},{"netherite_axe",9500},{"netherite_shovel",8000},
+            {"netherite_helmet",20000},{"netherite_chestplate",60000},{"netherite_leggings",50000},{"netherite_boots",15000},
+            {"elytra",20000},{"totem_of_undying",15000},{"shulker_shell",1500},{"shulker_box",3500},
+            {"nether_star",40000},{"beacon",60000},{"experience_bottle",300},{"enchanted_book",2000},
+            {"trident",12000},{"mace",30000},{"heavy_core",20000},{"wind_charge",150},{"breeze_rod",600}
+        };
+
     @Override
     public void onInitialize() {
-        prices.setBase("minecraft:kelp", 50);
-        prices.setBase("minecraft:diamond", 500);
-        prices.setBase("minecraft:iron_ingot", 80);
-        prices.setBase("minecraft:gold_ingot", 120);
-        prices.setBase("minecraft:sea_lantern", 300);
-        prices.setBase("minecraft:netherite_ingot", 5_000);
-        prices.setBase("minecraft:netherite_chestplate", 60_000);
+        for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
         prices.setEnchantValue("minecraft:protection", 20_000);
         prices.setEnchantValue("minecraft:sharpness", 15_000);
         prices.setEnchantValue("minecraft:mending", 100_000);
@@ -75,7 +89,7 @@ public class DonutMod implements ModInitializer {
 
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> registerCommands(d));
 
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> loadBalances());
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> { loadBalances(); PriceFile.loadInto(prices); });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> saveBalances());
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> createBoard(handler.getPlayer()));
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> boards.remove(handler.getPlayer().getUUID()));
