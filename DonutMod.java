@@ -83,9 +83,10 @@ public class DonutMod implements ModInitializer {
     @Override
     public void onInitialize() {
         for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
-        prices.setEnchantValue("minecraft:protection", 20_000);
-        prices.setEnchantValue("minecraft:sharpness", 15_000);
-        prices.setEnchantValue("minecraft:mending", 100_000);
+        prices.setEnchantValue("minecraft:protection", 800_000);
+        prices.setEnchantValue("minecraft:sharpness", 600_000);
+        prices.setEnchantValue("minecraft:mending", 4_000_000);
+        prices.sellFactor = 5.0 / PriceFile.MULT;   // /sell zahlt nur 5x statt 40x des Originalpreises
         meta.roll(META_POOL, 2, RND);
 
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> registerCommands(d));
@@ -149,6 +150,7 @@ public class DonutMod implements ModInitializer {
     }
 
     // ---- Bot-Logik ----
+    static final int MIN_AH = 10_000, MIN_ORDERS = 3_000;
     static final Map<String, Item> ITEM_BY_ID = new HashMap<>();
     final List<Item> pool = new ArrayList<>();
     static final String[] BAD = {"spawn_egg", "command_block", "structure_", "barrier", "light", "debug_stick", "jigsaw",
@@ -172,7 +174,7 @@ public class DonutMod implements ModInitializer {
     /** Mindestens 500 Bot-Orders mit zufaelligen Items. */
     void seedOrders() {
         if (pool.isEmpty()) return;
-        while (orders.all().size() < 500) {
+        while (orders.all().size() < MIN_ORDERS) {
             Item it = pool.get(RND.nextInt(pool.size()));
             int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
             int amt = max > 1 ? 16 + RND.nextInt(max * 3) : 1 + RND.nextInt(5);
@@ -183,7 +185,7 @@ public class DonutMod implements ModInitializer {
     /** Mindestens 500 Bot-Angebote im Auktionshaus. */
     void seedAh() {
         if (pool.isEmpty()) return;
-        while (ah.all().size() < 500) {
+        while (ah.all().size() < MIN_AH) {
             Item it = pool.get(RND.nextInt(pool.size()));
             int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
             addBotListing(new ItemStack(it, max > 1 ? 1 + RND.nextInt(max) : 1));
@@ -208,7 +210,7 @@ public class DonutMod implements ModInitializer {
             if (o.owner == null) continue;
             Item it = ITEM_BY_ID.get(o.itemId);
             if (it == null) continue;
-            double ratio = o.pricePerItem / Math.max(1.0, (double) prices.unitPrice(o.itemId, Map.of()));
+            double ratio = o.pricePerItem / Math.max(1.0, (double) prices.sellUnitPrice(o.itemId, Map.of()));
             double chance = Math.min(0.8, 0.05 * Math.pow(ratio, 3));
             if (RND.nextDouble() < chance) {
                 int n = Math.max(1, (int) Math.ceil(o.remaining * (0.1 + RND.nextDouble() * 0.4)));

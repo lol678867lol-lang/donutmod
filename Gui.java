@@ -130,6 +130,10 @@ public final class Gui {
             for (int i = 45; i < 54; i++) box.setItem(i, pane());
             if (page > 0) box.setItem(45, named(Items.ARROW, "§eVorherige Seite", "§7Seite " + page + "/" + pages()));
             if (page < pages() - 1) box.setItem(53, named(Items.ARROW, "§eNächste Seite", "§7Seite " + (page + 2) + "/" + pages()));
+            if (pages() > 10) {
+                box.setItem(46, named(Items.SPECTRAL_ARROW, "§e-10 Seiten"));
+                box.setItem(52, named(Items.SPECTRAL_ARROW, "§e+10 Seiten"));
+            }
             box.setItem(49, named(Items.GOLD_INGOT, "§6Dein Geld: §a$" + DonutMod.fmt(m.eco.get(p.getUUID())),
                     "§7Seite " + (page + 1) + "/" + pages(), "§7Einträge: §f" + view.size()));
             for (Map.Entry<Integer, Supplier<ItemStack>> e : icons.entrySet()) box.setItem(e.getKey(), e.getValue().get());
@@ -141,6 +145,8 @@ public final class Gui {
                 if (idx < view.size()) onClick.accept(view.get(idx), pl);
             } else if (slot == 45 && page > 0) page--;
             else if (slot == 53 && page < pages() - 1) page++;
+            else if (slot == 46 && pages() > 10) page = Math.max(0, page - 10);
+            else if (slot == 52 && pages() > 10) page = Math.min(pages() - 1, page + 10);
             else if (acts.containsKey(slot)) acts.get(slot).run();
             render();
         }

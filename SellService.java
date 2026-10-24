@@ -16,8 +16,8 @@ public class SellService {
             Orders.Order o = orders.bestFor(s);
             if (o != null) {
                 int n = Math.min(o.remaining, s.count());
-                total += o.pricePerItem * n + prices.unitPrice(s) * (s.count() - n);
-            } else total += prices.stackPrice(s);
+                total += o.pricePerItem * n + prices.sellUnitPrice(s) * (s.count() - n);
+            } else total += prices.sellStackPrice(s);
         }
         return total;
     }
@@ -33,7 +33,7 @@ public class SellService {
                 rest = new Stack(rest.id(), rest.count() - n, rest.enchants());
             }
             if (rest.count() > 0) {
-                long p = prices.stackPrice(rest);
+                long p = prices.sellStackPrice(rest);
                 eco.add(seller, p);
                 total += p;
             }

@@ -24,7 +24,7 @@ public class Orders {
     public Order botOrder(String itemId, Map<String, Integer> ench, int amount, Random rnd) {
         double f = 1.0 + rnd.nextDouble() * 0.5;
         if (meta.isMeta(itemId)) f *= meta.orderPriceFactor;
-        long ppi = Math.round(prices.unitPrice(itemId, ench) * f);
+        long ppi = Math.round(prices.sellUnitPrice(itemId, ench) * f);
         Order o = new Order(nextId++, null, itemId, ench, amount, ppi);
         orders.add(o);
         return o;
@@ -47,7 +47,7 @@ public class Orders {
 
     /** Beste passende Order, aber nur wenn Order-Preis > normaler Sell-Preis. */
     public Order bestFor(Stack s) {
-        long sell = prices.unitPrice(s);
+        long sell = prices.sellUnitPrice(s);
         Order best = null;
         for (Order o : orders)
             if (o.owner == null && o.remaining > 0 && matches(o, s) && o.pricePerItem > sell
@@ -68,7 +68,7 @@ public class Orders {
     /** Anzeige-Wert fürs Tooltip: höhere Order-Preise ersetzen den Sell-Preis. */
     public long tooltipUnitValue(Stack s) {
         Order o = bestFor(s);
-        return o != null ? o.pricePerItem : prices.unitPrice(s);
+        return o != null ? o.pricePerItem : prices.sellUnitPrice(s);
     }
     /** Spieler-Order abbrechen: Restbetrag wird zurueckgezahlt. */
     public boolean cancel(Order o) {
