@@ -5,6 +5,10 @@ version = project.mod_version
 group = 'de.donutmod'
 base { archivesName = 'donutmod' }
 
+loom {
+    accessWidenerPath = file('donutmod.accesswidener')
+}
+
 sourceSets {
     main {
         java {
@@ -15,6 +19,7 @@ sourceSets {
         resources {
             srcDir '.'
             include 'fabric.mod.json'
+            include 'donutmod.accesswidener'
         }
     }
 }

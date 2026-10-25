@@ -26,13 +26,13 @@ public class PriceFile {
     /** Premium-Items mit festen Preisen (nicht multipliziert). */
     static final Map<String, Long> HIGH = Map.ofEntries(
             Map.entry("minecraft:mace", 2_500_000L), Map.entry("minecraft:elytra", 1_500_000L),
-            Map.entry("minecraft:totem_of_undying", 800_000L), Map.entry("minecraft:heavy_core", 1_000_000L),
+            Map.entry("minecraft:totem_of_undying", 800_000L), Map.entry("minecraft:heavy_core", 4_000_000L), Map.entry("minecraft:dragon_head", 6_000_000L),
             Map.entry("minecraft:nether_star", 1_500_000L), Map.entry("minecraft:beacon", 2_500_000L),
             Map.entry("minecraft:enchanted_golden_apple", 1_000_000L), Map.entry("minecraft:trident", 600_000L),
             Map.entry("minecraft:dragon_egg", 5_000_000L),
             Map.entry("minecraft:netherite_upgrade_smithing_template", 400_000L));
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v2.json"); }
+    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v3.json"); }
 
     public static void loadInto(PriceBook prices) {
         try {

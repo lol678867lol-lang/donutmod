@@ -2,12 +2,16 @@
   "schemaVersion": 1,
   "id": "donutmod",
   "version": "${version}",
-  "name": "DonutMod",
-  "description": "DonutSMP-Style Wirtschaft: /sell, Orders, Auktionshaus, wechselnde Metas.",
+  "name": "Donutsmp Economy",
+  "description": "DonutSMP-Style Wirtschaft: /sell, Orders, Auktionshaus, Spawner, Shard-Werkzeuge.",
   "authors": ["User"],
   "license": "MIT",
   "environment": "*",
-  "entrypoints": { "main": ["de.donutmod.fabric.DonutMod"] },
+  "entrypoints": {
+    "main": ["de.donutmod.fabric.DonutMod"],
+    "client": ["de.donutmod.fabric.DonutModClient"]
+  },
+  "accessWidener": "donutmod.accesswidener",
   "depends": {
     "fabricloader": ">=0.18.0",
     "minecraft": "~1.21.11",

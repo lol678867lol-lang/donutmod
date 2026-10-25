@@ -7,6 +7,7 @@ import java.util.Map;
 public class PriceBook {
     private final Map<String, Long> base = new HashMap<>();
     private final Map<String, Long> enchantValue = new HashMap<>();
+    private final Map<String, Double> factor = new HashMap<>();
     public long defaultBase = 100;
     public long defaultEnchantPerLevel = 5_000;
     /** Globaler Preisfaktor für alle Items (1.25 = 25 % teurer). */
@@ -14,6 +15,20 @@ public class PriceBook {
 
     /** Anteil des Marktpreises, den /sell (und Bot-Orders) zahlen. Markt (Auktionshaus) = voller Preis. */
     public double sellFactor = 1.0;
+
+    /** Nachfrage: positiv = wird viel gekauft (teurer), negativ = wird viel verkauft (guenstiger). */
+    public void bump(String id, double d) {
+        double f = factor.getOrDefault(id, 1.0) + d;
+        factor.put(id, Math.max(0.4, Math.min(3.0, f)));
+    }
+
+    /** Preise pendeln sich langsam wieder bei 1.0 ein (jede Minute aufrufen). */
+    public void decay() {
+        factor.replaceAll((k, v) -> v + (1.0 - v) * 0.03);
+        factor.values().removeIf(v -> Math.abs(v - 1.0) < 0.005);
+    }
+
+    public double factorOf(String id) { return factor.getOrDefault(id, 1.0); }
 
     public void setBase(String id, long price) { base.put(id, price); }
     public void setEnchantValue(String enchantId, long perLevel) { enchantValue.put(enchantId, perLevel); }
@@ -23,7 +38,7 @@ public class PriceBook {
         long p = base.getOrDefault(id, defaultBase);
         for (var e : enchants.entrySet())
             p += enchantValue.getOrDefault(e.getKey(), defaultEnchantPerLevel) * e.getValue();
-        return Math.round(p * priceMultiplier);
+        return Math.round(p * priceMultiplier * factor.getOrDefault(id, 1.0));
     }
 
     /** Preis, den /sell pro Item zahlt (Marktpreis * sellFactor). */

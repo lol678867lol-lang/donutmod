@@ -36,6 +36,7 @@ import java.util.UUID;
 import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 /** Kisten-Menues (Sell, Orders, Auktionshaus, Lager) - rein serverseitig, kein Client-Mod noetig. */
@@ -127,6 +128,8 @@ public final class Gui {
         final Map<Integer, Runnable> acts = new HashMap<>();
         int page = 0;
         List<T> view = List.of();
+        /** Wenn gesetzt: Liste wird nach einem Item-Klick nicht neu geladen, nur das Element entfernt, falls es weg ist. */
+        Predicate<T> alive;
 
         ListGui(DonutMod m, ServerPlayer p, String title, Supplier<List<T>> source,
                 Function<T, ItemStack> display, BiConsumer<T, ServerPlayer> onClick) {
@@ -143,8 +146,9 @@ public final class Gui {
             return new ArrayList<>(view.subList(from, Math.min(view.size(), from + 45)));
         }
 
+        void load() { view = source.get(); }
+
         void render() {
-            view = source.get();
             page = Math.max(0, Math.min(page, pages() - 1));
             for (int i = 0; i < 45; i++) {
                 int idx = page * 45 + i;
@@ -163,18 +167,25 @@ public final class Gui {
         }
 
         void click(int slot, ServerPlayer pl) {
+            boolean reload = false;
             if (slot < 45) {
                 int idx = page * 45 + slot;
-                if (idx < view.size()) onClick.accept(view.get(idx), pl);
-            } else if (acts.containsKey(slot)) acts.get(slot).run();
+                if (idx < view.size()) {
+                    T item = view.get(idx);
+                    onClick.accept(item, pl);
+                    if (alive != null) { if (!alive.test(item)) view.remove(item); } else reload = true;
+                }
+            } else if (acts.containsKey(slot)) { acts.get(slot).run(); reload = true; }
             else if (slot == 45 && page > 0) page--;
             else if (slot == 53 && page < pages() - 1) page++;
             else if (slot == 46 && pages() > 10) page = Math.max(0, page - jump());
             else if (slot == 52 && pages() > 10) page = Math.min(pages() - 1, page + jump());
+            if (reload) load();
             render();
         }
 
         void open() {
+            load();
             render();
             p.openMenu(new SimpleMenuProvider((id, inv, pl) ->
                     new Menu(id, inv, box, true, Set.<Integer>of(), (s, sp) -> click(s, sp), null, null),
@@ -192,22 +203,17 @@ public final class Gui {
         String[] sortNames = {"Neueste zuerst", "Günstigste zuerst", "Teuerste zuerst", "Nach Item-Name"};
         ListGui<AuctionHouse.Listing> g = new ListGui<>(m, p, who[0] != null ? "Auktionshaus: " + m.playerName(who[0]) : q[0].isEmpty() ? "Auktionshaus" : "Auktionshaus: " + q[0],
                 () -> {
-                    List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
+                    List<AuctionHouse.Listing> l = m.market.ahSorted(st[0]);
                     if (st[1] == 1) l.removeIf(x -> !p.getUUID().equals(x.seller));
                     if (who[0] != null) l.removeIf(x -> !who[0].equals(x.seller));
                     else if (!q[0].isEmpty())
                         l.removeIf(x -> !matches(q[0], x.stack.id(), x.stack.enchants().keySet(), DonutMod.ITEM_BY_ID.get(x.stack.id())));
-                    switch (st[0]) {
-                        case 0 -> l.sort(Comparator.comparingInt((AuctionHouse.Listing x) -> x.id).reversed());
-                        case 1 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price));
-                        case 2 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price).reversed());
-                        default -> l.sort(Comparator.comparing((AuctionHouse.Listing x) -> x.stack.id()));
-                    }
                     return l;
                 },
                 l -> {
                     ItemStack base = m.ahItems.get(l.id);
-                    if (base == null) return named(Items.BARRIER, "§cFehler");
+                    if (base == null) base = m.buildStack(l.stack.id(), l.stack.enchants(), l.stack.count());
+                    if (base.isEmpty()) return named(Items.BARRIER, "§cFehler");
                     boolean own = p.getUUID().equals(l.seller);
                     return withLore(base, "§7Preis: §a$" + DonutMod.fmt(l.price),
                             "§7Verkäufer: §f" + (l.seller == null ? "Server" : own ? "Du" : m.playerName(l.seller)), "",
@@ -216,18 +222,24 @@ public final class Gui {
                 (l, pl) -> {
                     if (pl.getUUID().equals(l.seller)) {
                         if (m.ah.cancel(l)) {
+                            m.market.ahRemoved(l);
                             ItemStack it = m.ahItems.remove(l.id);
-                            if (it != null) pl.getInventory().placeItemBackInInventory(it);
+                            if (it == null) it = m.buildStack(l.stack.id(), l.stack.enchants(), l.stack.count());
+                            if (!it.isEmpty()) pl.getInventory().placeItemBackInInventory(it);
                             say(pl, "§eAngebot zurückgeholt.");
                         }
                         return;
                     }
                     if (!m.ah.buy(pl.getUUID(), l)) { say(pl, "§cNicht genug Geld oder schon verkauft."); return; }
+                    m.market.ahRemoved(l);
+                    m.prices.bump(l.stack.id(), 0.002 * l.stack.count());   // wird viel gekauft -> teurer
                     ItemStack it = m.ahItems.remove(l.id);
-                    if (it != null) pl.getInventory().placeItemBackInInventory(it);
+                    if (it == null) it = m.buildStack(l.stack.id(), l.stack.enchants(), l.stack.count());
+                    if (!it.isEmpty()) pl.getInventory().placeItemBackInInventory(it);
                     DonutMod.ping(pl, SoundEvents.VILLAGER_YES, 1.0f);
                     say(pl, "§aGekauft für $" + DonutMod.fmt(l.price));
                 });
+        g.alive = l -> m.ah.all().contains(l);
         g.extra(47, () -> named(Items.HOPPER, "§eSortierung", "§7Aktuell: §f" + sortNames[st[0]], "§7Klick: nächste Sortierung"),
                 () -> st[0] = (st[0] + 1) % 4);
         g.extra(48, () -> who[0] != null ? named(Items.PLAYER_HEAD, "§eSpieler: §f" + m.playerName(who[0]), "§7Klick: Filter löschen")
@@ -249,12 +261,11 @@ public final class Gui {
         UUID[] who = {m.uuidOfName(search)};
         ListGui<Orders.Order> g = new ListGui<>(m, p, who[0] != null ? "Orders: " + m.playerName(who[0]) : q[0].isEmpty() ? "Orders" : "Orders: " + q[0],
                 () -> {
-                    List<Orders.Order> l = new ArrayList<>(m.orders.all());
+                    List<Orders.Order> l = m.market.ordersSorted();
                     if (mine[0]) l.removeIf(o -> !p.getUUID().equals(o.owner));
                     if (who[0] != null) l.removeIf(o -> !who[0].equals(o.owner));
                     else if (!q[0].isEmpty())
                         l.removeIf(o -> !matches(q[0], o.itemId, o.enchants.keySet(), DonutMod.ITEM_BY_ID.get(o.itemId)));
-                    l.sort(Comparator.comparingLong((Orders.Order o) -> o.pricePerItem).reversed());
                     return l;
                 },
                 o -> {
@@ -271,6 +282,7 @@ public final class Gui {
                             own ? "§eKlick: Order abbrechen (Geld zurück)" : "§aKlick: passende Items aus deinem Inventar liefern");
                 },
                 (o, pl) -> deliver(m, pl, o));
+        g.alive = o -> m.orders.all().contains(o);
         g.extra(47, () -> mine[0]
                         ? named(Items.BARRIER, "§cAlle Orders", "§7Klick: alle Orders zeigen")
                         : named(Items.CHEST, "§bMeine Orders", "§7Klick: nur deine Orders zeigen", "",
@@ -297,7 +309,7 @@ public final class Gui {
     static void deliver(DonutMod m, ServerPlayer pl, Orders.Order o) {
         if (pl.getUUID().equals(o.owner)) {
             long back = o.pricePerItem * o.remaining;
-            if (m.orders.cancel(o)) say(pl, "§eOrder abgebrochen, $" + DonutMod.fmt(back) + " zurück.");
+            if (m.orders.cancel(o)) { m.market.ordersRemoved(o); say(pl, "§eOrder abgebrochen, $" + DonutMod.fmt(back) + " zurück."); }
             return;
         }
         Inventory inv = pl.getInventory();
@@ -319,6 +331,8 @@ public final class Gui {
         UUID owner = o.owner;
         long pay = m.orders.fill(o, new Stack(o.itemId, got, o.enchants), pl.getUUID());
         if (owner != null) for (ItemStack c : taken) m.addPending(owner, c);
+        m.prices.bump(o.itemId, -0.002 * got);   // wird viel verkauft -> guenstiger
+        if (!m.orders.all().contains(o)) m.market.ordersRemoved(o);
         DonutMod.ping(pl, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.2f);
         say(pl, "§aGeliefert: " + got + "x für $" + DonutMod.fmt(pay));
     }
