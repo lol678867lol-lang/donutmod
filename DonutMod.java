@@ -527,8 +527,11 @@ public class DonutMod implements ModInitializer {
                             return msg(c, "§aDu hast $" + fmt(amt) + " an " + to.getName().getString() + " gesendet.");
                         }))));
 
+        // OP-Check wie bei Vanilla-Befehlen (nutzt die Anforderung von /gamemode, funktioniert in jeder Version)
+        com.mojang.brigadier.tree.CommandNode<CommandSourceStack> gm = d.getRoot().getChild("gamemode");
+        java.util.function.Predicate<CommandSourceStack> isOp = gm != null ? gm.getRequirement() : (src -> false);
         d.register(Commands.literal("givemoney")
-                .requires(src -> src.hasPermission(2))
+                .requires(isOp)
                 .then(Commands.argument("spieler", EntityArgument.player())
                         .then(Commands.argument("betrag", StringArgumentType.word()).executes(c -> {
                             ServerPlayer to = EntityArgument.getPlayer(c, "spieler");

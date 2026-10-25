@@ -74,9 +74,10 @@ public final class Custom {
         if (s.isEmpty()) return null;
         CustomData cd = s.get(DataComponents.CUSTOM_DATA);
         if (cd == null) return null;
+        CompoundTag tag = cd.copyTag();
         for (String id : BASE.keySet()) {
             String k = "donutmod_" + id.substring(9);
-            if (cd.contains(k)) return k;
+            if (tag.contains(k)) return k;
         }
         return null;
     }
