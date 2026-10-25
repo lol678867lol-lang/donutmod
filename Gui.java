@@ -188,12 +188,14 @@ public final class Gui {
     static void openAh(DonutMod m, ServerPlayer p, String search) {
         int[] st = {0, 0}; // [0] Sortierung, [1] 1 = nur meine Angebote
         String[] q = {search.trim().toLowerCase(Locale.ROOT)};
+        UUID[] who = {m.uuidOfName(search)};
         String[] sortNames = {"Neueste zuerst", "Günstigste zuerst", "Teuerste zuerst", "Nach Item-Name"};
-        ListGui<AuctionHouse.Listing> g = new ListGui<>(m, p, q[0].isEmpty() ? "Auktionshaus" : "Auktionshaus: " + q[0],
+        ListGui<AuctionHouse.Listing> g = new ListGui<>(m, p, who[0] != null ? "Auktionshaus: " + m.playerName(who[0]) : q[0].isEmpty() ? "Auktionshaus" : "Auktionshaus: " + q[0],
                 () -> {
                     List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
                     if (st[1] == 1) l.removeIf(x -> !p.getUUID().equals(x.seller));
-                    if (!q[0].isEmpty())
+                    if (who[0] != null) l.removeIf(x -> !who[0].equals(x.seller));
+                    else if (!q[0].isEmpty())
                         l.removeIf(x -> !matches(q[0], x.stack.id(), x.stack.enchants().keySet(), DonutMod.ITEM_BY_ID.get(x.stack.id())));
                     switch (st[0]) {
                         case 0 -> l.sort(Comparator.comparingInt((AuctionHouse.Listing x) -> x.id).reversed());
@@ -208,7 +210,7 @@ public final class Gui {
                     if (base == null) return named(Items.BARRIER, "§cFehler");
                     boolean own = p.getUUID().equals(l.seller);
                     return withLore(base, "§7Preis: §a$" + DonutMod.fmt(l.price),
-                            "§7Verkäufer: §f" + (l.seller == null ? "Server" : own ? "Du" : "Spieler"), "",
+                            "§7Verkäufer: §f" + (l.seller == null ? "Server" : own ? "Du" : m.playerName(l.seller)), "",
                             own ? "§eKlick: Angebot zurückholen" : "§aKlick: Sofort kaufen");
                 },
                 (l, pl) -> {
@@ -228,8 +230,9 @@ public final class Gui {
                 });
         g.extra(47, () -> named(Items.HOPPER, "§eSortierung", "§7Aktuell: §f" + sortNames[st[0]], "§7Klick: nächste Sortierung"),
                 () -> st[0] = (st[0] + 1) % 4);
-        g.extra(48, () -> q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
-                () -> { q[0] = ""; g.page = 0; });
+        g.extra(48, () -> who[0] != null ? named(Items.PLAYER_HEAD, "§eSpieler: §f" + m.playerName(who[0]), "§7Klick: Filter löschen")
+                        : q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
+                () -> { q[0] = ""; who[0] = null; g.page = 0; });
         g.extra(51, () -> st[1] == 0
                         ? named(Items.CHEST, "§bMeine Angebote", "§7Klick: nur deine Angebote zeigen", "§7Suche: §f/ah <Name>")
                         : named(Items.BARRIER, "§cZurück", "§7Klick: alle Angebote zeigen"),
@@ -243,26 +246,28 @@ public final class Gui {
     static void openOrders(DonutMod m, ServerPlayer p, String search) {
         boolean[] mine = {false};
         String[] q = {search.trim().toLowerCase(Locale.ROOT)};
-        ListGui<Orders.Order> g = new ListGui<>(m, p, q[0].isEmpty() ? "Orders" : "Orders: " + q[0],
+        UUID[] who = {m.uuidOfName(search)};
+        ListGui<Orders.Order> g = new ListGui<>(m, p, who[0] != null ? "Orders: " + m.playerName(who[0]) : q[0].isEmpty() ? "Orders" : "Orders: " + q[0],
                 () -> {
                     List<Orders.Order> l = new ArrayList<>(m.orders.all());
                     if (mine[0]) l.removeIf(o -> !p.getUUID().equals(o.owner));
-                    if (!q[0].isEmpty())
+                    if (who[0] != null) l.removeIf(o -> !who[0].equals(o.owner));
+                    else if (!q[0].isEmpty())
                         l.removeIf(o -> !matches(q[0], o.itemId, o.enchants.keySet(), DonutMod.ITEM_BY_ID.get(o.itemId)));
                     l.sort(Comparator.comparingLong((Orders.Order o) -> o.pricePerItem).reversed());
                     return l;
                 },
                 o -> {
-                    Item it = DonutMod.ITEM_BY_ID.get(o.itemId);
-                    if (it == null) return named(Items.BARRIER, "§cUnbekanntes Item");
+                    ItemStack proto = m.buildStack(o.itemId, o.enchants, 1);
+                    if (proto.isEmpty()) return named(Items.BARRIER, "§cUnbekanntes Item");
                     boolean own = p.getUUID().equals(o.owner);
-                    int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
+                    int max = Math.max(1, proto.getMaxStackSize());
                     ItemStack base = m.buildStack(o.itemId, o.enchants, Math.max(1, Math.min(o.remaining, max)));
                     return withLore(base,
                             "§7Zahlt: §a$" + DonutMod.fmt(o.pricePerItem) + " §7pro Stück",
                             "§7Gesucht: §f" + o.remaining + " Stück",
                             "§7Gesamt: §a$" + DonutMod.fmt(o.pricePerItem * o.remaining),
-                            "§7Besteller: §f" + (o.owner == null ? "Server" : own ? "Du" : "Spieler"), "",
+                            "§7Besteller: §f" + (o.owner == null ? "Server" : own ? "Du" : m.playerName(o.owner)), "",
                             own ? "§eKlick: Order abbrechen (Geld zurück)" : "§aKlick: passende Items aus deinem Inventar liefern");
                 },
                 (o, pl) -> deliver(m, pl, o));
@@ -272,19 +277,20 @@ public final class Gui {
                                 "§7Neue Order: §f/order create <Menge> <Preis>", "§7(Item in der Hand, Preis pro Stück)",
                                 "§7Suche: §f/order <Name>"),
                 () -> { mine[0] = !mine[0]; g.page = 0; });
-        g.extra(48, () -> q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
-                () -> { q[0] = ""; g.page = 0; });
+        g.extra(48, () -> who[0] != null ? named(Items.PLAYER_HEAD, "§eSpieler: §f" + m.playerName(who[0]), "§7Klick: Filter löschen")
+                        : q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
+                () -> { q[0] = ""; who[0] = null; g.page = 0; });
+        g.extra(50, () -> mine[0] ? named(Items.ANVIL, "§aNeue Order erstellen", "§7Klick: Item im Chat suchen, dann Menge,", "§7Preis und Verzauberungen einstellen") : pane(),
+                () -> { if (mine[0]) OrderBuilder.start(m, p); });
         g.extra(51, () -> named(Items.ENDER_CHEST, "§dAbholen",
                         "§7Gelieferte Items: §f" + m.pendingCount(p.getUUID()), "§7Klick: Lager öffnen"),
                 () -> openStorage(m, p));
         g.open();
     }
 
-    static boolean satisfies(ItemStack s, Map<String, Integer> need) {
-        if (need.isEmpty()) return true;
-        Map<String, Integer> have = DonutMod.toStack(s).enchants();
+    static boolean satisfies(Stack have, Map<String, Integer> need) {
         for (Map.Entry<String, Integer> e : need.entrySet())
-            if (have.getOrDefault(e.getKey(), 0) < e.getValue()) return false;
+            if (have.enchants().getOrDefault(e.getKey(), 0) < e.getValue()) return false;
         return true;
     }
 
@@ -294,14 +300,14 @@ public final class Gui {
             if (m.orders.cancel(o)) say(pl, "§eOrder abgebrochen, $" + DonutMod.fmt(back) + " zurück.");
             return;
         }
-        Item it = DonutMod.ITEM_BY_ID.get(o.itemId);
-        if (it == null) return;
         Inventory inv = pl.getInventory();
         int need = o.remaining, got = 0;
         List<ItemStack> taken = new ArrayList<>();
         for (int i = 0; i < 36 && got < need; i++) {
             ItemStack s = inv.getItem(i);
-            if (!s.isEmpty() && s.getItem() == it && satisfies(s, o.enchants)) {
+            if (s.isEmpty()) continue;
+            Stack ts = DonutMod.toStack(s);
+            if (ts.id().equals(o.itemId) && satisfies(ts, o.enchants)) {
                 int take = Math.min(s.getCount(), need - got);
                 taken.add(s.copyWithCount(take));
                 s.shrink(take);

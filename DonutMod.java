@@ -12,6 +12,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.commands.SharedSuggestionProvider;
 import net.minecraft.commands.Commands;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -101,10 +102,18 @@ public class DonutMod implements ModInitializer {
         meta.roll(META_POOL, 2, RND);
 
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> registerCommands(d));
+        Tools.register();
+        Spawners.register();
+        Hoppers.register();
+        OrderBuilder.register(this);
 
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; loadBalances(); initEnchants(); PriceFile.loadInto(prices); initItems(); seedOrders(); seedAh(); });
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); seedOrders(); seedAh(); seedCustom(); });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> { refundOrders(); saveBalances(); });
-        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> createBoard(handler.getPlayer()));
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            ServerPlayer jp = handler.getPlayer();
+            names.put(jp.getUUID(), jp.getName().getString());
+            createBoard(jp);
+        });
         ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> boards.remove(handler.getPlayer().getUUID()));
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
@@ -121,6 +130,7 @@ public class DonutMod implements ModInitializer {
 
     // ---- Speichern ----
     void saveBalances() {
+        saveNames();
         try {
             Map<String, Long> out = new HashMap<>();
             eco.snapshot().forEach((u, v) -> out.put(u.toString(), v));
@@ -141,7 +151,7 @@ public class DonutMod implements ModInitializer {
     // ---- Scoreboard (Sidebar rechts, mittig) ----
     void createBoard(ServerPlayer p) {
         Objective obj = new Scoreboard().addObjective("donutmod_money", ObjectiveCriteria.DUMMY,
-                Component.literal("§6§lDonutMod"), ObjectiveCriteria.RenderType.INTEGER, false, BlankFormat.INSTANCE);
+                Component.literal("§9§lDonutsmp Economy"), ObjectiveCriteria.RenderType.INTEGER, false, BlankFormat.INSTANCE);
         boards.put(p.getUUID(), obj);
         p.connection.send(new ClientboundSetObjectivePacket(obj, 0));                 // 0 = erstellen
         p.connection.send(new ClientboundSetDisplayObjectivePacket(DisplaySlot.SIDEBAR, obj));
@@ -149,8 +159,10 @@ public class DonutMod implements ModInitializer {
     }
 
     void sendMoney(ServerPlayer p, Objective obj) {
-        p.connection.send(new ClientboundSetScorePacket("money", obj.getName(), 0,
+        p.connection.send(new ClientboundSetScorePacket("money", obj.getName(), 1,
                 Optional.of(Component.literal("§eGeld: §a$" + fmt(eco.get(p.getUUID())))), Optional.of(BlankFormat.INSTANCE)));
+        p.connection.send(new ClientboundSetScorePacket("info", obj.getName(), 0,
+                Optional.of(Component.literal("§9unser Donutsmp")), Optional.of(BlankFormat.INSTANCE)));
     }
 
     void updateBoards(MinecraftServer server) {
@@ -188,10 +200,41 @@ public class DonutMod implements ModInitializer {
     final Map<String, Integer> capCache = new HashMap<>();
     final List<Holder.Reference<Enchantment>> enchList = new ArrayList<>();
     final Set<UUID> shulkerOn = new HashSet<>();
+    /** Spielernamen (UUID -> Name), damit man /ah <Name> und /orders <Name> nutzen kann, auch fuer Offline-Spieler. */
+    final Map<UUID, String> names = new HashMap<>();
+
+    static Path namesFile() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-names.json"); }
+
+    String playerName(UUID u) { return u == null ? "Server" : names.getOrDefault(u, "Spieler"); }
+
+    UUID uuidOfName(String n) {
+        if (n == null || n.isBlank()) return null;
+        for (Map.Entry<UUID, String> e : names.entrySet()) if (e.getValue().equalsIgnoreCase(n.trim())) return e.getKey();
+        return null;
+    }
+
+    void saveNames() {
+        try {
+            Map<String, String> out = new HashMap<>();
+            names.forEach((u, n) -> out.put(u.toString(), n));
+            Files.writeString(namesFile(), GSON.toJson(out));
+        } catch (Exception e) { System.err.println("[DonutMod] Namen speichern fehlgeschlagen: " + e); }
+    }
+
+    void loadNames() {
+        try {
+            if (!Files.exists(namesFile())) return;
+            Map<String, String> in = GSON.fromJson(Files.readString(namesFile()), new TypeToken<Map<String, String>>() {}.getType());
+            if (in != null) in.forEach((k, v) -> names.put(UUID.fromString(k), v));
+        } catch (Exception e) { System.err.println("[DonutMod] Namen laden fehlgeschlagen: " + e); }
+    }
 
     String idOf(Item it) { return idCache.computeIfAbsent(it, k -> BuiltInRegistries.ITEM.getKey(k).toString()); }
 
-    static String idOfStatic(ItemStack st) { return BuiltInRegistries.ITEM.getKey(st.getItem()).toString(); }
+    static String idOfStatic(ItemStack st) {
+        String c = Custom.idOf(st);
+        return c != null ? c : BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+    }
 
     static String nameOf(Item it) {
         return NAME_CACHE.computeIfAbsent(it, k -> k.getDefaultInstance().getHoverName().getString().toLowerCase(Locale.ROOT));
@@ -243,6 +286,8 @@ public class DonutMod implements ModInitializer {
 
     /** ItemStack aus Item-Id, Verzauberungen und Menge (fuer Anzeige und Lieferungen). */
     ItemStack buildStack(String itemId, Map<String, Integer> ench, int count) {
+        ItemStack custom = Custom.make(itemId);
+        if (custom != null) { custom.setCount(Math.max(1, count)); return custom; }
         Item it = ITEM_BY_ID.get(itemId);
         if (it == null) return ItemStack.EMPTY;
         ItemStack st = new ItemStack(it, Math.max(1, count));
@@ -255,6 +300,10 @@ public class DonutMod implements ModInitializer {
     /** Mindestens MIN_ORDERS Bot-Orders, auch mit Verzauberungen. */
     void seedOrders() {
         if (pool.isEmpty()) return;
+        Set<String> haveCustom = new HashSet<>();
+        for (Orders.Order o : orders.all()) if (o.owner == null && o.itemId.startsWith("donutmod:")) haveCustom.add(o.itemId);
+        for (String cid : Custom.BASE.keySet())
+            if (!haveCustom.contains(cid)) orders.botOrder(cid, Map.of(), 1 + RND.nextInt(2), RND);
         Map<String, Integer> cnt = new HashMap<>();
         for (Orders.Order o : orders.all()) if (o.enchants.isEmpty()) cnt.merge(o.itemId, 1, Integer::sum);
         int tries = 0;
@@ -272,6 +321,21 @@ public class DonutMod implements ModInitializer {
                 int amt = max > 1 ? 16 + RND.nextInt(max * 3) : 1 + RND.nextInt(3);
                 orders.botOrder(id, Map.of(), amt, RND);
                 cnt.merge(id, 1, Integer::sum);
+            }
+        }
+    }
+
+    /** Immer mindestens 2 Angebote pro Shard-Werkzeug und Spawner (15-30 Mio. bzw. Spawner-Preise). */
+    void seedCustom() {
+        Map<String, Integer> have = new HashMap<>();
+        for (ItemStack s : ahItems.values()) { String cid = Custom.idOf(s); if (cid != null) have.merge(cid, 1, Integer::sum); }
+        for (Map.Entry<String, Long> e : Custom.BASE.entrySet()) {
+            for (int i = have.getOrDefault(e.getKey(), 0); i < 2; i++) {
+                ItemStack st = Custom.make(e.getKey());
+                if (st == null) continue;
+                long price = Math.round(e.getValue() * (0.85 + RND.nextDouble() * 0.3));
+                AuctionHouse.Listing l = ah.list(null, toStack(st), price);
+                ahItems.put(l.id, st);
             }
         }
     }
@@ -325,7 +389,7 @@ public class DonutMod implements ModInitializer {
                 }
                 continue;
             }
-            if (!ITEM_BY_ID.containsKey(o.itemId)) continue;
+            if (buildStack(o.itemId, o.enchants, 1).isEmpty()) continue;
             double ratio = o.pricePerItem / Math.max(1.0, (double) prices.sellUnitPrice(o.itemId, o.enchants));
             double chance = Math.min(0.8, 0.05 * Math.pow(ratio, 3));
             if (RND.nextDouble() < chance) {
@@ -336,6 +400,7 @@ public class DonutMod implements ModInitializer {
         }
         seedAh();
         seedOrders();
+        seedCustom();
     }
 
     // ---- Gelieferte Order-Items (zum Abholen) ----
@@ -370,7 +435,7 @@ public class DonutMod implements ModInitializer {
 
     // ---- Umrechnung MC <-> Core ----
     static Stack toStack(ItemStack st) {
-        String id = BuiltInRegistries.ITEM.getKey(st.getItem()).toString();
+        String id = idOfStatic(st);
         Map<String, Integer> ench = new HashMap<>();
         for (ItemEnchantments ie : new ItemEnchantments[]{st.get(DataComponents.ENCHANTMENTS), st.get(DataComponents.STORED_ENCHANTMENTS)})
             if (ie != null)
@@ -448,7 +513,8 @@ public class DonutMod implements ModInitializer {
 
         d.register(Commands.literal("ah")
                 .executes(c -> { Gui.openAh(this, c.getSource().getPlayerOrException(), ""); return 1; })
-                .then(Commands.argument("suche", StringArgumentType.greedyString()).executes(c -> {
+                .then(Commands.argument("suche", StringArgumentType.greedyString())
+                        .suggests((ctx, b) -> SharedSuggestionProvider.suggest(ctx.getSource().getOnlinePlayerNames(), b)).executes(c -> {
                     Gui.openAh(this, c.getSource().getPlayerOrException(), StringArgumentType.getString(c, "suche"));
                     return 1;
                 }))
@@ -487,13 +553,14 @@ public class DonutMod implements ModInitializer {
                             if (h.isEmpty()) return msg(c, "§cNimm das gewünschte Item in die Hand.");
                             int amount = IntegerArgumentType.getInteger(c, "menge");
                             long ppi = LongArgumentType.getLong(c, "preis");
-                            String id = BuiltInRegistries.ITEM.getKey(h.getItem()).toString();
+                            String id = toStack(h).id();
                             Orders.Order o = orders.playerOrder(p.getUUID(), id, toStack(h).enchants(), amount, ppi);
                             if (o == null) return msg(c, "§cNicht genug Geld. Du brauchst $" + fmt(ppi * amount) + ".");
                             return msg(c, "§aOrder #" + o.id + " erstellt: " + amount + "x " + h.getHoverName().getString()
                                     + " für je $" + fmt(ppi) + " (bezahlt: $" + fmt(ppi * amount) + ")");
                         }))))
-                .then(Commands.argument("suche", StringArgumentType.greedyString()).executes(c -> {
+                .then(Commands.argument("suche", StringArgumentType.greedyString())
+                        .suggests((ctx, b) -> SharedSuggestionProvider.suggest(ctx.getSource().getOnlinePlayerNames(), b)).executes(c -> {
                     Gui.openOrders(this, c.getSource().getPlayerOrException(), StringArgumentType.getString(c, "suche"));
                     return 1;
                 }));
