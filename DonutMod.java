@@ -100,10 +100,7 @@ public class DonutMod implements ModInitializer {
     public void onInitialize() {
         INSTANCE = this;
         for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
-        prices.setEnchantValue("minecraft:protection", 800_000);
-        prices.setEnchantValue("minecraft:sharpness", 600_000);
-        prices.setEnchantValue("minecraft:mending", 4_000_000);
-        prices.sellFactor = 5.0 / PriceFile.MULT;   // /sell zahlt nur 5x statt 40x des Originalpreises
+        prices.sellFactor = 6.0 / PriceFile.MULT;   // /sell zahlt 6x, Markt (AH) 48x des Originalpreises
         meta.roll(META_POOL, 2, RND);
 
         CommandRegistrationCallback.EVENT.register((d, ctx, env) -> registerCommands(d));
@@ -343,11 +340,10 @@ public class DonutMod implements ModInitializer {
         enchList.clear();
         if (srv == null) return;
         srv.registryAccess().lookupOrThrow(Registries.ENCHANTMENT).listElements().forEach(enchList::add);
-        Set<String> fixed = Set.of("minecraft:protection", "minecraft:sharpness", "minecraft:mending");
+        // Jede Verzauberung ist ca. 10k (Stufe 1) bis 40k (Maximalstufe) wert, inkl. 25 % Aufschlag
         for (Holder.Reference<Enchantment> h : enchList) {
-            String name = h.getRegisteredName();
-            if (fixed.contains(name)) continue;
-            prices.setEnchantValue(name, h.value().getMaxLevel() <= 1 ? 1_200_000 : 300_000);
+            int max = Math.max(1, h.value().getMaxLevel());
+            prices.setEnchantValue(h.getRegisteredName(), Math.max(8_000L, Math.min(32_000L, 32_000L / max)));
         }
     }
 
@@ -413,6 +409,7 @@ public class DonutMod implements ModInitializer {
             }
         }
         prices.decay();
+        if (market != null) market.popDecay();
         // Spieler-Orders: Bots liefern langsam, in kleinen Portionen
         List<Orders.Order> mine = new ArrayList<>();
         for (Orders.Order o : orders.all()) if (o.owner != null) mine.add(o);
@@ -530,17 +527,21 @@ public class DonutMod implements ModInitializer {
         // OP-Check wie bei Vanilla-Befehlen (nutzt die Anforderung von /gamemode, funktioniert in jeder Version)
         com.mojang.brigadier.tree.CommandNode<CommandSourceStack> gm = d.getRoot().getChild("gamemode");
         java.util.function.Predicate<CommandSourceStack> isOp = gm != null ? gm.getRequirement() : (src -> false);
-        d.register(Commands.literal("givemoney")
-                .requires(isOp)
-                .then(Commands.argument("spieler", EntityArgument.player())
-                        .then(Commands.argument("betrag", StringArgumentType.word()).executes(c -> {
-                            ServerPlayer to = EntityArgument.getPlayer(c, "spieler");
-                            long amt = parseAmount(StringArgumentType.getString(c, "betrag"));
-                            if (amt <= 0) return msg(c, "§cUngültiger Betrag. Beispiele: 500, 1.5k, 2m, 3b, 1t");
-                            eco.add(to.getUUID(), amt);
-                            to.sendSystemMessage(Component.literal("§aDu hast $" + fmt(amt) + " erhalten."));
-                            return msg(c, "§a$" + fmt(amt) + " an " + to.getName().getString() + " gegeben.");
-                        }))));
+        // /money <Spieler> add|set|remove|weniger <Betrag>   (nur OP)
+        com.mojang.brigadier.builder.LiteralArgumentBuilder<CommandSourceStack> moneyCmd = Commands.literal("money").requires(isOp);
+        com.mojang.brigadier.builder.RequiredArgumentBuilder<CommandSourceStack, String> who = Commands.argument("spieler", StringArgumentType.word())
+                .suggests((ctx, sb) -> SharedSuggestionProvider.suggest(names.values(), sb));
+        for (String op : new String[]{"add", "set", "remove", "weniger"}) {
+            String kind = op.equals("weniger") ? "remove" : op;
+            who.then(Commands.literal(op).then(Commands.argument("betrag", StringArgumentType.word()).executes(c -> money(c, kind))));
+        }
+        d.register(moneyCmd.then(who));
+
+        // /worth [Item]  zeigt den Wert
+        d.register(Commands.literal("worth")
+                .executes(c -> worth(c, null))
+                .then(Commands.argument("item", StringArgumentType.greedyString())
+                        .executes(c -> worth(c, StringArgumentType.getString(c, "item")))));
 
         d.register(Commands.literal("bal").executes(c -> msg(c,
                 "§eKontostand: §a$" + fmt(eco.get(c.getSource().getPlayerOrException().getUUID())))));
@@ -613,6 +614,49 @@ public class DonutMod implements ModInitializer {
                     Gui.openOrders(this, c.getSource().getPlayerOrException(), StringArgumentType.getString(c, "suche"));
                     return 1;
                 }));
+    }
+
+    int money(CommandContext<CommandSourceStack> c, String op) {
+        String n = StringArgumentType.getString(c, "spieler");
+        UUID u = uuidOfName(n);
+        if (u == null) return msg(c, "§cSpieler unbekannt (muss schon einmal beigetreten sein): " + n);
+        String raw = StringArgumentType.getString(c, "betrag");
+        long amt = raw.equals("0") ? 0 : parseAmount(raw);
+        if (amt < 0 || (amt == 0 && !op.equals("set"))) return msg(c, "§cUngültiger Betrag. Beispiele: 500, 1.5k, 2m, 3b, 1t");
+        long cur = eco.get(u);
+        switch (op) {
+            case "add" -> eco.add(u, amt);
+            case "remove" -> eco.take(u, Math.min(amt, cur));
+            default -> { if (amt >= cur) eco.add(u, amt - cur); else eco.take(u, cur - amt); }
+        }
+        ServerPlayer on = srv == null ? null : srv.getPlayerList().getPlayer(u);
+        if (on != null) on.sendSystemMessage(Component.literal("§eDein Kontostand: §a$" + fmt(eco.get(u))));
+        return msg(c, "§aKontostand von " + names.getOrDefault(u, n) + ": $" + fmt(eco.get(u)));
+    }
+
+    int worth(CommandContext<CommandSourceStack> c, String name) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer p = c.getSource().getPlayerOrException();
+        List<Stack> list = new ArrayList<>();
+        String label;
+        if (name == null || name.isBlank() || name.equalsIgnoreCase("item") || name.equalsIgnoreCase("hand")) {
+            ItemStack h = p.getMainHandItem();
+            if (h.isEmpty()) return msg(c, "§cNimm ein Item in die Hand oder nutze /worth <Name>, z.B. /worth diamond.");
+            addStacks(h, list);
+            label = h.getHoverName().getString() + " x" + h.getCount();
+        } else {
+            String q = name.trim().toLowerCase(Locale.ROOT).replace(' ', '_');
+            Item found = null;
+            for (Item it : pool) { String id = idOf(it); if (id.substring(id.indexOf(':') + 1).equals(q)) { found = it; break; } }
+            if (found == null) for (Item it : pool) if (idOf(it).contains(q)) { found = it; break; }
+            if (found == null) return msg(c, "§cKein Item gefunden: " + name);
+            list.add(new Stack(idOf(found), 1, Map.of()));
+            label = new ItemStack(found).getHoverName().getString() + " x1";
+        }
+        long sell = 0, market = 0;
+        for (Stack s : list) { sell += prices.sellStackPrice(s); market += prices.stackPrice(s); }
+        double f = prices.factorOf(list.get(0).id());
+        return msg(c, "§6Wert von §f" + label + "\n§7Sell (/sell): §a$" + fmt(sell) + "\n§7AH-Markt: §6$" + fmt(market)
+                + "\n§7Nachfrage-Faktor: §f" + String.format(Locale.ROOT, "%.2f", f) + "x");
     }
 
     int doSell(CommandContext<CommandSourceStack> c, boolean all) throws com.mojang.brigadier.exceptions.CommandSyntaxException {

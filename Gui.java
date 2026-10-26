@@ -69,14 +69,68 @@ public final class Gui {
 
     static ItemStack pane() { return named(Items.GRAY_STAINED_GLASS_PANE, " "); }
 
-    /** Suche: Teil des Item-Ids, des Anzeigenamens oder einer Verzauberung (z.B. "tnt", "sharp"). */
-    static boolean matches(String q, String id, Collection<String> ench, Item item) {
+    /** Geparste Suche: Woerter (Item/Verzauberung) und Stufen (5, V). */
+    static final class Query { final List<String> words = new ArrayList<>(); final List<Integer> levels = new ArrayList<>(); }
+
+    static final Map<String, String> ALIAS = Map.ofEntries(
+            Map.entry("buch", "book"), Map.entry("buecher", "book"), Map.entry("bücher", "book"),
+            Map.entry("spitzhacke", "pickaxe"), Map.entry("pickaxt", "pickaxe"), Map.entry("schwert", "sword"),
+            Map.entry("axt", "axe"), Map.entry("schaufel", "shovel"), Map.entry("hacke", "hoe"),
+            Map.entry("helm", "helmet"), Map.entry("brustplatte", "chestplate"), Map.entry("hose", "leggings"),
+            Map.entry("stiefel", "boots"), Map.entry("schild", "shield"), Map.entry("dia", "diamond"),
+            Map.entry("diamant", "diamond"), Map.entry("eisen", "iron"));
+
+    static String lastQ = null;
+    static Query lastP = null;
+
+    static Integer levelOf(String t) {
+        if (t.matches("\\d{1,2}")) return Integer.parseInt(t);
+        return switch (t) {
+            case "i" -> 1; case "ii" -> 2; case "iii" -> 3; case "iv" -> 4; case "v" -> 5;
+            case "vi" -> 6; case "vii" -> 7; case "viii" -> 8; case "ix" -> 9; case "x" -> 10;
+            default -> null;
+        };
+    }
+
+    static Query parse(String q) {
+        Query r = new Query();
+        for (String t : q.toLowerCase(Locale.ROOT).trim().split("\\s+")) {
+            if (t.isEmpty()) continue;
+            t = ALIAS.getOrDefault(t, t);
+            Integer lvl = levelOf(t);
+            if (lvl != null) r.levels.add(lvl); else r.words.add(t);
+        }
+        return r;
+    }
+
+    /** Suche: "effi 5 book" findet ein Effizienz-V-Buch, "shard pick" die Shard-Spitzhacke, "tnt" alles mit TNT. */
+    static boolean matches(String q, String id, Map<String, Integer> ench, Item item) {
         if (q.isEmpty()) return true;
-        String p = id.substring(id.indexOf(':') + 1);
-        String u = q.replace(' ', '_');
-        if (p.contains(u)) return true;
-        for (String e : ench) if (e.contains(u)) return true;
-        return item != null && DonutMod.nameOf(item).contains(q);
+        if (!q.equals(lastQ)) { lastQ = q; lastP = parse(q); }
+        Query p = lastP;
+        String path = id.substring(id.indexOf(':') + 1);
+        String name = null;
+        for (String w : p.words) {
+            if (path.contains(w)) continue;
+            boolean hit = false;
+            for (String e : ench.keySet()) if (e.contains(w)) { hit = true; break; }
+            if (!hit && item != null) {
+                if (name == null) name = DonutMod.nameOf(item).replace(' ', '_');
+                hit = name.contains(w);
+            }
+            if (!hit) return false;
+        }
+        for (int lvl : p.levels) {
+            boolean ok = false;
+            for (Map.Entry<String, Integer> e : ench.entrySet()) {
+                if (e.getValue() != lvl) continue;
+                if (p.words.isEmpty()) { ok = true; break; }
+                for (String w : p.words) if (e.getKey().contains(w)) { ok = true; break; }
+                if (ok) break;
+            }
+            if (!ok) return false;
+        }
+        return true;
     }
 
     // ---------- Menue, das Klicks selbst behandelt ----------
@@ -207,7 +261,7 @@ public final class Gui {
                     if (st[1] == 1) l.removeIf(x -> !p.getUUID().equals(x.seller));
                     if (who[0] != null) l.removeIf(x -> !who[0].equals(x.seller));
                     else if (!q[0].isEmpty())
-                        l.removeIf(x -> !matches(q[0], x.stack.id(), x.stack.enchants().keySet(), DonutMod.ITEM_BY_ID.get(x.stack.id())));
+                        l.removeIf(x -> !matches(q[0], x.stack.id(), x.stack.enchants(), DonutMod.ITEM_BY_ID.get(x.stack.id())));
                     return l;
                 },
                 l -> {
@@ -232,7 +286,8 @@ public final class Gui {
                     }
                     if (!m.ah.buy(pl.getUUID(), l)) { say(pl, "§cNicht genug Geld oder schon verkauft."); return; }
                     m.market.ahRemoved(l);
-                    m.prices.bump(l.stack.id(), 0.002 * l.stack.count());   // wird viel gekauft -> teurer
+                    m.prices.bump(l.stack.id(), 0.0008 * l.stack.count());   // wird viel gekauft -> teurer
+                    m.market.onBought(l.stack.id(), 1.0);
                     ItemStack it = m.ahItems.remove(l.id);
                     if (it == null) it = m.buildStack(l.stack.id(), l.stack.enchants(), l.stack.count());
                     if (!it.isEmpty()) pl.getInventory().placeItemBackInInventory(it);
@@ -265,7 +320,7 @@ public final class Gui {
                     if (mine[0]) l.removeIf(o -> !p.getUUID().equals(o.owner));
                     if (who[0] != null) l.removeIf(o -> !who[0].equals(o.owner));
                     else if (!q[0].isEmpty())
-                        l.removeIf(o -> !matches(q[0], o.itemId, o.enchants.keySet(), DonutMod.ITEM_BY_ID.get(o.itemId)));
+                        l.removeIf(o -> !matches(q[0], o.itemId, o.enchants, DonutMod.ITEM_BY_ID.get(o.itemId)));
                     return l;
                 },
                 o -> {
@@ -276,7 +331,7 @@ public final class Gui {
                     ItemStack base = m.buildStack(o.itemId, o.enchants, Math.max(1, Math.min(o.remaining, max)));
                     return withLore(base,
                             "§7Zahlt: §a$" + DonutMod.fmt(o.pricePerItem) + " §7pro Stück",
-                            "§7Gesucht: §f" + o.remaining + " Stück",
+                            "§7Gesucht: §f" + DonutMod.fmt(o.remaining) + " Stück",
                             "§7Gesamt: §a$" + DonutMod.fmt(o.pricePerItem * o.remaining),
                             "§7Besteller: §f" + (o.owner == null ? "Server" : own ? "Du" : m.playerName(o.owner)), "",
                             own ? "§eKlick: Order abbrechen (Geld zurück)" : "§aKlick: passende Items aus deinem Inventar liefern");
@@ -331,7 +386,7 @@ public final class Gui {
         UUID owner = o.owner;
         long pay = m.orders.fill(o, new Stack(o.itemId, got, o.enchants), pl.getUUID());
         if (owner != null) for (ItemStack c : taken) m.addPending(owner, c);
-        m.prices.bump(o.itemId, -0.002 * got);   // wird viel verkauft -> guenstiger
+        m.prices.bump(o.itemId, -0.0004 * got);   // wird viel verkauft -> guenstiger
         if (!m.orders.all().contains(o)) m.market.ordersRemoved(o);
         DonutMod.ping(pl, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.2f);
         say(pl, "§aGeliefert: " + got + "x für $" + DonutMod.fmt(pay));
@@ -408,16 +463,19 @@ public final class Gui {
         return cc == null || cc.equals(ItemContainerContents.EMPTY);
     }
 
-    /** Packt je 27 Stacks in einen leeren Shulker aus dem Inventar des Spielers. */
-    static void packShulkers(ServerPlayer p, List<ItemStack> src, List<ItemStack> out, List<ItemStack> used) {
+    /** Packt je 27 Stacks in einen leeren Shulker (jede Farbe) aus dem Inventar, sonst aus dem Lager (gelieferte Items). */
+    static void packShulkers(DonutMod m, ServerPlayer p, List<ItemStack> src, List<ItemStack> out, List<ItemStack> used) {
         Inventory inv = p.getInventory();
+        List<ItemStack> lager = m.pending.getOrDefault(p.getUUID(), new ArrayList<>());
         int idx = 0;
         while (idx < src.size()) {
-            int slot = -1;
-            for (int i = 0; i < 36; i++) if (isEmptyShulker(inv.getItem(i))) { slot = i; break; }
-            if (slot < 0) break;
-            ItemStack box = inv.getItem(slot).copy();
-            inv.setItem(slot, ItemStack.EMPTY);
+            ItemStack box = null;
+            for (int i = 0; i < 36; i++)
+                if (isEmptyShulker(inv.getItem(i))) { box = inv.getItem(i).copy(); inv.setItem(i, ItemStack.EMPTY); break; }
+            if (box == null)
+                for (int i = 0; i < lager.size(); i++)
+                    if (isEmptyShulker(lager.get(i))) { box = lager.get(i).copyWithCount(1); lager.remove(i); break; }
+            if (box == null) break;
             List<ItemStack> chunk = new ArrayList<>();
             for (int k = 0; k < 27 && idx < src.size(); k++, idx++) {
                 chunk.add(src.get(idx).copy());
@@ -436,8 +494,8 @@ public final class Gui {
         int moved = 0;
         if (sh) {
             List<ItemStack> out = new ArrayList<>(), used = new ArrayList<>();
-            packShulkers(p, sel, out, used);
-            if (used.isEmpty()) { say(p, "§cKeine leeren Shulker im Inventar."); return; }
+            packShulkers(m, p, sel, out, used);
+            if (used.isEmpty()) { say(p, "§cKeine leeren Shulker im Inventar oder Lager."); return; }
             for (ItemStack u : used) moved += u.getCount();
             Set<ItemStack> ident = Collections.newSetFromMap(new IdentityHashMap<>());
             ident.addAll(used);

@@ -51,9 +51,9 @@ public final class OrderBuilder {
         List<String> ids = new ArrayList<>();
         for (Item it : m.pool) {
             String id = m.idOf(it);
-            if (Gui.matches(ql, id, List.of(), it)) ids.add(id);
+            if (Gui.matches(ql, id, Map.of(), it)) ids.add(id);
         }
-        for (String cid : Custom.BASE.keySet()) if (Gui.matches(ql, cid, List.of(), null)) ids.add(cid);
+        for (String cid : Custom.BASE.keySet()) if (Gui.matches(ql, cid, Map.of(), null)) ids.add(cid);
         if (ids.isEmpty()) { Gui.say(p, "§cKein Item gefunden für: " + q); Gui.openOrders(m, p); return; }
         Gui.ListGui<String> g = new Gui.ListGui<>(m, p, "Item wählen: " + q,
                 () -> ids,

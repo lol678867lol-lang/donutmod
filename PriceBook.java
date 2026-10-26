@@ -19,12 +19,12 @@ public class PriceBook {
     /** Nachfrage: positiv = wird viel gekauft (teurer), negativ = wird viel verkauft (guenstiger). */
     public void bump(String id, double d) {
         double f = factor.getOrDefault(id, 1.0) + d;
-        factor.put(id, Math.max(0.4, Math.min(3.0, f)));
+        factor.put(id, Math.max(0.6, Math.min(2.5, f)));
     }
 
     /** Preise pendeln sich langsam wieder bei 1.0 ein (jede Minute aufrufen). */
     public void decay() {
-        factor.replaceAll((k, v) -> v + (1.0 - v) * 0.03);
+        factor.replaceAll((k, v) -> v + (1.0 - v) * 0.06);
         factor.values().removeIf(v -> Math.abs(v - 1.0) < 0.005);
     }
 

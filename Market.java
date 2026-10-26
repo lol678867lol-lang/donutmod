@@ -32,6 +32,8 @@ public final class Market {
     boolean reduced;
     final Map<String, Integer> ahCount = new HashMap<>();
     final Map<String, Integer> orderCount = new HashMap<>();
+    /** Beliebtheit je Item: steigt bei Kaeufen, sinkt mit der Zeit. Unbeliebte Items haben nur 1 Angebot. */
+    final Map<String, Double> pop = new HashMap<>();
     final Map<Item, List<Holder.Reference<Enchantment>>> compat = new HashMap<>();
     static final Map<String, Integer> NONE = Map.of();
     static final Random RND = DonutMod.RND;
@@ -51,8 +53,25 @@ public final class Market {
         maxOrders = (long) (minOrders * capFactor);
         reduced = scale < 0.999;
         System.out.println("[DonutMod] Markt-Ziel: " + minAh + " Angebote, " + minOrders + " Orders (RAM-Faktor " + String.format("%.2f", scale) + ")");
+        for (Item it : m.pool) pop.put(m.idOf(it), 1.0);
         for (AuctionHouse.Listing l : m.ah.all()) if (l.stack.enchants().isEmpty()) ahCount.merge(l.stack.id(), 1, Integer::sum);
         for (Orders.Order o : m.orders.all()) if (o.enchants.isEmpty()) orderCount.merge(o.itemId, 1, Integer::sum);
+    }
+
+    // ---------- Beliebtheit ----------
+    void onBought(String id, double w) { pop.merge(id, w, (a, b) -> Math.min(5.0, a + b)); }
+
+    /** Jede Minute: Beliebtheit sinkt langsam Richtung 0,3. */
+    void popDecay() { pop.replaceAll((k, v) -> 0.3 + (v - 0.3) * 0.98); }
+
+    /** Wie viele Angebote ein Item gleichzeitig haben darf: beliebte viele, unbeliebte nur 1. */
+    int capFor(String id) {
+        double s = pop.getOrDefault(id, 1.0);
+        int rarity = m.cap(id);
+        if (s < 0.6) return 1;
+        long price = Math.max(1, m.prices.unitPrice(id, NONE));
+        long c = (long) Math.max(2, Math.min(200_000.0, 3e7 / price * Math.min(s, 5.0)));
+        return (int) Math.min(rarity, c);
     }
 
     // ---------- Zaehler ----------
@@ -71,19 +90,48 @@ public final class Market {
             ItemStack st = new ItemStack(k);
             boolean book = k == Items.ENCHANTED_BOOK;
             if (book || st.isEnchantable())
-                for (Holder.Reference<Enchantment> h : m.enchList) if (book || h.value().isSupportedItem(st)) r.add(h);
+                for (Holder.Reference<Enchantment> h : m.enchList)
+                    if (!h.getRegisteredName().contains("curse") && (book || h.value().isSupportedItem(st))) r.add(h);
             return r;
         });
         if (ok.isEmpty()) return null;
         boolean book = it == Items.ENCHANTED_BOOK;
-        int n = Math.min(ok.size(), 1 + RND.nextInt(book ? 2 : 4));
+        List<Holder.Reference<Enchantment>> chosen = new ArrayList<>();
+        if (!book)
+            for (String pref : new String[]{"minecraft:mending", "minecraft:unbreaking"})
+                if (RND.nextInt(10) < 8)
+                    for (Holder.Reference<Enchantment> h : ok) if (h.getRegisteredName().equals(pref)) { tryAdd(chosen, h); break; }
+        List<Holder.Reference<Enchantment>> shuffled = new ArrayList<>(ok);
+        Collections.shuffle(shuffled, RND);
+        int target = book ? 1 + (RND.nextInt(4) == 0 ? 1 : 0) : 3 + RND.nextInt(3);
+        for (Holder.Reference<Enchantment> h : shuffled) {
+            if (chosen.size() >= target) break;
+            tryAdd(chosen, h);
+        }
         Map<String, Integer> out = new HashMap<>();
-        while (out.size() < n) {
-            Holder.Reference<Enchantment> h = ok.get(RND.nextInt(ok.size()));
+        for (Holder.Reference<Enchantment> h : chosen) {
             int max = Math.max(1, h.value().getMaxLevel());
-            out.put(h.getRegisteredName(), RND.nextInt(3) == 0 ? max : 1 + RND.nextInt(max));
+            out.put(h.getRegisteredName(), RND.nextInt(4) != 0 ? max : 1 + RND.nextInt(max));
         }
         return out;
+    }
+
+    /** Fuegt eine Verzauberung nur hinzu, wenn sie mit allen bisherigen vertraeglich ist (kein Protection + Fire Protection). */
+    static void tryAdd(List<Holder.Reference<Enchantment>> chosen, Holder.Reference<Enchantment> h) {
+        for (Holder.Reference<Enchantment> c : chosen)
+            if (c == h || !Enchantment.areCompatible(h, c)) return;
+        chosen.add(h);
+    }
+
+    /** Bot-Orders: guenstige Items werden in riesigen Mengen geordert (z.B. 10 Mio. Kelp). */
+    int botAmount(Item it, String id, boolean plain) {
+        if (!plain) return 1 + RND.nextInt(3);
+        long p = Math.max(1, m.prices.sellUnitPrice(id, NONE));
+        boolean stack = Math.max(1, it.getDefaultInstance().getMaxStackSize()) > 1;
+        long cap = Math.min(stack ? 50_000_000L : 200L, Math.max(stack ? 1000L : 3L, (long) (5e10 / p)));
+        double lo = Math.log(stack ? 256 : 1), hi = Math.log(Math.max(cap, 2));
+        long amt = (long) Math.exp(lo + RND.nextDouble() * (hi - lo));
+        return (int) Math.max(1, Math.min(cap, amt));
     }
 
     void addAh(int n) {
@@ -100,7 +148,7 @@ public final class Market {
                 if (e != null) ench = e; else if (book) continue;
             }
             boolean plain = ench.isEmpty();
-            if (plain && ahCount.getOrDefault(id, 0) >= m.cap(id)) continue;
+            if (plain && ahCount.getOrDefault(id, 0) >= capFor(id)) continue;
             int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
             int count = plain && max > 1 ? 1 + RND.nextInt(max) : 1;
             m.ah.botList(new Stack(id, count, ench), RND);
@@ -124,8 +172,7 @@ public final class Market {
             }
             boolean plain = ench.isEmpty();
             if (plain && orderCount.getOrDefault(id, 0) >= m.cap(id)) continue;
-            int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-            int amt = !plain ? 1 + RND.nextInt(3) : max > 1 ? 16 + RND.nextInt(max * 3) : 1 + RND.nextInt(3);
+            int amt = botAmount(it, id, plain);
             m.orders.botOrder(id, ench, amt, RND);
             if (plain) orderCount.merge(id, 1, Integer::sum);
             made++;
@@ -153,7 +200,7 @@ public final class Market {
 
     /** Jede Sekunde: 7 alte Eintraege weg (von Bots gekauft/erfuellt), 10 neue dazu (bis zur Obergrenze). */
     void churn() {
-        for (AuctionHouse.Listing l : m.ah.removeRandomBots(7, RND)) { ahRemoved(l); m.ahItems.remove(l.id); }
+        for (AuctionHouse.Listing l : m.ah.removeRandomBots(7, RND)) { ahRemoved(l); m.ahItems.remove(l.id); onBought(l.stack.id(), 0.02); }
         for (Orders.Order o : m.orders.removeRandomBots(7, RND)) ordersRemoved(o);
         if (m.ah.size() < maxAh) addAh(10);
         if (m.orders.size() < maxOrders) addOrders(10);

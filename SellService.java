@@ -25,7 +25,7 @@ public class SellService {
     public Result sell(UUID seller, List<Stack> items) {
         long total = 0;
         for (Stack s : items) {
-            prices.bump(s.id(), -0.002 * s.count());   // wird viel verkauft -> guenstiger
+            prices.bump(s.id(), -0.0004 * s.count());   // wird viel verkauft -> guenstiger
             Stack rest = s;
             Orders.Order o;
             while (rest.count() > 0 && (o = orders.bestFor(rest)) != null) {

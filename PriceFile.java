@@ -22,7 +22,7 @@ import java.util.TreeMap;
  */
 public class PriceFile {
     /** Alle Basis-Preise werden damit multipliziert (DonutSMP-artiges Preisniveau). Zum Anpassen hier aendern. */
-    static final long MULT = 40;
+    static final long MULT = 48;
     /** Premium-Items mit festen Preisen (nicht multipliziert). */
     static final Map<String, Long> HIGH = Map.ofEntries(
             Map.entry("minecraft:mace", 2_500_000L), Map.entry("minecraft:elytra", 1_500_000L),
@@ -32,7 +32,7 @@ public class PriceFile {
             Map.entry("minecraft:dragon_egg", 5_000_000L),
             Map.entry("minecraft:netherite_upgrade_smithing_template", 400_000L));
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v3.json"); }
+    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v4.json"); }
 
     public static void loadInto(PriceBook prices) {
         try {
