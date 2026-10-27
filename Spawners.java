@@ -55,7 +55,7 @@ public final class Spawners {
     static final List<Pend> PENDING = new ArrayList<>();
     static final Gson GSON = new Gson();
     static final long CAP = 64L * 500;
-    static final int MAX_STACK = 1000;
+    static final int MAX_STACK = 1_000_000_000;
 
     static final Map<String, Object[][]> DROPS = new HashMap<>();
     static {
@@ -67,7 +67,7 @@ public final class Spawners {
         DROPS.put("spider", new Object[][]{{"minecraft:string", 4}, {"minecraft:spider_eye", 1}});
     }
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-spawners.json"); }
+    static Path file() { return DonutMod.worldDir().resolve("donutmod-spawners.json"); }
     static String key(String dim, int x, int y, int z) { return dim + "|" + x + "|" + y + "|" + z; }
     static String key(Level l, BlockPos p) { return key(l.dimension().toString(), p.getX(), p.getY(), p.getZ()); }
 
@@ -126,13 +126,17 @@ public final class Spawners {
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> {
             if (!state.is(Blocks.SPAWNER) || !(world instanceof ServerLevel level) || !(player instanceof ServerPlayer sp)) return;
             Sp reg = MAP.get(key(level, pos));
-            if (reg != null && reg.stack > 1) {
-                reg.stack--;
+            int take = sp.isShiftKeyDown() ? 64 : 1;   // Sneaken: 64 Spawner auf einmal abbauen
+            if (reg != null && reg.stack > take) {
+                reg.stack -= take;
                 level.setBlock(pos, Blocks.SPAWNER.defaultBlockState(), 3);
-                Block.popResource(level, pos, Custom.make("donutmod:spawner_" + reg.type));
+                ItemStack part = Custom.make("donutmod:spawner_" + reg.type);
+                part.setCount(take);
+                Block.popResource(level, pos, part);
                 Gui.say(sp, "§eSpawner-Stapel: noch " + reg.stack + "x");
                 return;
             }
+            int whole = reg != null ? reg.stack : 1;
             if (reg != null) MAP.remove(key(level, pos));
             String type = reg != null ? reg.type : detect(level, be);
             if (reg != null) {
@@ -142,7 +146,7 @@ public final class Spawners {
                 }
             }
             ItemStack drop = Custom.make("donutmod:spawner_" + type);
-            if (drop != null) Block.popResource(level, pos, drop);
+            if (drop != null) { drop.setCount(Math.max(1, Math.min(64, whole))); Block.popResource(level, pos, drop); }
         });
 
         // Platzierte Spawner erzeugen vanilla Schweine - die werden entfernt
@@ -180,6 +184,15 @@ public final class Spawners {
         ServerLifecycleEvents.SERVER_STOPPING.register(s -> save());
     }
 
+    /** Registriert einen Welt-Spawner (z.B. in Basen), der Items statt Mobs herstellt. */
+    static void registerAt(ServerLevel level, BlockPos pos, String type) {
+        Sp s = new Sp();
+        s.dim = level.dimension().toString();
+        s.x = pos.getX(); s.y = pos.getY(); s.z = pos.getZ();
+        s.type = type; s.owner = "world";
+        MAP.put(key(level, pos), s);
+    }
+
     static void generate() {
         for (Sp s : MAP.values()) {
             Object[][] d = DROPS.get(s.type);
@@ -199,6 +212,8 @@ public final class Spawners {
     }
 
     static void load() {
+        MAP.clear();
+        PENDING.clear();
         try {
             if (!Files.exists(file())) return;
             Sp[] arr = GSON.fromJson(Files.readString(file()), Sp[].class);

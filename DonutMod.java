@@ -12,6 +12,7 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.commands.CommandSourceStack;
+import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
@@ -61,21 +62,44 @@ public class DonutMod implements ModInitializer {
     static final List<String> META_POOL = List.of("minecraft:kelp", "minecraft:diamond", "minecraft:iron_ingot",
             "minecraft:gold_ingot", "minecraft:sea_lantern", "minecraft:cactus", "minecraft:bone_meal");
 
-    final PriceBook prices = new PriceBook();
-    final MetaManager meta = new MetaManager();
-    final Economy eco = new Economy();
-    final Orders orders = new Orders(prices, meta, eco);
-    final AuctionHouse ah = new AuctionHouse(prices, meta, eco);
-    final SellService sell = new SellService(prices, orders, eco);
+    PriceBook prices = new PriceBook();
+    MetaManager meta = new MetaManager();
+    Economy eco = new Economy();
+    Orders orders = new Orders(prices, meta, eco);
+    AuctionHouse ah = new AuctionHouse(prices, meta, eco);
+    SellService sell = new SellService(prices, orders, eco);
+
+    /** Ordner der aktuellen Welt: jede Welt hat ihr eigenes Geld, ihre eigenen Orders, Homes, Spawner usw. */
+    static Path worldDir() {
+        try {
+            Path d = INSTANCE.srv.getWorldPath(LevelResource.ROOT).resolve("donutmod");
+            Files.createDirectories(d);
+            return d;
+        } catch (Exception e) { return FabricLoader.getInstance().getConfigDir(); }
+    }
+
+    /** Setzt alles zurueck, bevor die Daten der neuen Welt geladen werden. */
+    void resetState() {
+        prices = new PriceBook();
+        meta = new MetaManager();
+        eco = new Economy();
+        orders = new Orders(prices, meta, eco);
+        ah = new AuctionHouse(prices, meta, eco);
+        sell = new SellService(prices, orders, eco);
+        ahItems.clear(); pending.clear(); names.clear(); shulkerOn.clear(); boards.clear(); capCache.clear();
+        for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
+        prices.sellFactor = 6.0 / PriceFile.MULT;
+        meta.roll(META_POOL, 2, RND);
+    }
     /** Echte ItemStacks zu den AH-Angeboten (Core kennt nur Stack-Beschreibungen). */
     final Map<Integer, ItemStack> ahItems = new HashMap<>();
     /** Pro Spieler eigenes Sidebar-Scoreboard (rechts, mittig) mit dem eigenen Kontostand. */
     final Map<UUID, Objective> boards = new HashMap<>();
     static final Gson GSON = new Gson();
-    static Path saveFile() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-balances.json"); }
+    static Path saveFile() { return worldDir().resolve("donutmod-balances.json"); }
 
     static final Object[][] KNOWN = {
-            {"kelp",50},{"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
+            {"kelp",50},{"stick",4},{"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
             {"string",90},{"spider_eye",70},{"rotten_flesh",20},{"gunpowder",120},{"ender_pearl",400},{"blaze_rod",250},
             {"coal",60},{"charcoal",50},{"iron_ingot",80},{"gold_ingot",120},{"copper_ingot",30},{"diamond",500},
             {"emerald",350},{"lapis_lazuli",60},{"redstone",40},{"quartz",70},{"amethyst_shard",90},
@@ -108,9 +132,12 @@ public class DonutMod implements ModInitializer {
         Spawners.register();
         Hoppers.register();
         Homes.register();
+        Rtp.register();
+        Bases.register();
+        Tpa.register();
         OrderBuilder.register(this);
 
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); loadMarket(); market = new Market(this); market.init(); seedCustom(); market.ensureCustomOrders(); });
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; resetState(); loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); loadMarket(); market = new Market(this); market.init(); seedCustom(); market.ensureCustomOrders(); });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> saveBalances());
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             ServerPlayer jp = handler.getPlayer();
@@ -211,7 +238,7 @@ public class DonutMod implements ModInitializer {
     /** Spielernamen (UUID -> Name), damit man /ah <Name> und /orders <Name> nutzen kann, auch fuer Offline-Spieler. */
     final Map<UUID, String> names = new HashMap<>();
 
-    static Path marketFile() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-market.json"); }
+    static Path marketFile() { return worldDir().resolve("donutmod-market.json"); }
 
     static final class SavedListing { String seller; long price; String item; }
     static final class SavedOrder { String owner; String itemId; Map<String, Integer> ench; int remaining; long ppi; }
@@ -287,7 +314,7 @@ public class DonutMod implements ModInitializer {
         } catch (Exception e) { System.err.println("[DonutMod] Markt laden fehlgeschlagen: " + e); }
     }
 
-    static Path namesFile() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-names.json"); }
+    static Path namesFile() { return worldDir().resolve("donutmod-names.json"); }
 
     String playerName(UUID u) { return u == null ? "Server" : names.getOrDefault(u, "Spieler"); }
 
@@ -370,7 +397,13 @@ public class DonutMod implements ModInitializer {
     /** ItemStack aus Item-Id, Verzauberungen und Menge (fuer Anzeige und Lieferungen). */
     ItemStack buildStack(String itemId, Map<String, Integer> ench, int count) {
         ItemStack custom = Custom.make(itemId);
-        if (custom != null) { custom.setCount(Math.max(1, count)); return custom; }
+        if (custom != null) {
+            custom.setCount(Math.max(1, count));
+            for (Map.Entry<String, Integer> e : ench.entrySet())
+                for (Holder.Reference<Enchantment> h : enchList)
+                    if (h.getRegisteredName().equals(e.getKey())) { custom.enchant(h, e.getValue()); break; }
+            return custom;
+        }
         Item it = ITEM_BY_ID.get(itemId);
         if (it == null) return ItemStack.EMPTY;
         ItemStack st = new ItemStack(it, Math.max(1, count));

@@ -49,9 +49,10 @@ public final class Market {
         capFactor = Math.max(1.0, Math.min(1.5, budget / need));
         minAh = Math.max(10_000L, (long) (DonutMod.REQ_AH * scale));
         minOrders = Math.max(5_000L, (long) (DonutMod.REQ_ORDERS * scale));
+        if (Perf.LITE) { minAh = Math.max(10_000L, minAh * 3 / 10); minOrders = Math.max(5_000L, minOrders * 3 / 10); }
         maxAh = (long) (minAh * capFactor);
         maxOrders = (long) (minOrders * capFactor);
-        reduced = scale < 0.999;
+        reduced = scale < 0.999 || Perf.LITE;
         System.out.println("[DonutMod] Markt-Ziel: " + minAh + " Angebote, " + minOrders + " Orders (RAM-Faktor " + String.format("%.2f", scale) + ")");
         for (Item it : m.pool) pop.put(m.idOf(it), 1.0);
         for (AuctionHouse.Listing l : m.ah.all()) if (l.stack.enchants().isEmpty()) ahCount.merge(l.stack.id(), 1, Integer::sum);
@@ -134,6 +135,13 @@ public final class Market {
         return (int) Math.max(1, Math.min(cap, amt));
     }
 
+    /** Zufaellige, aber runde Stackgroessen: 1, 16, 32 oder 64 (nie mehr als der Stack des Items erlaubt). */
+    static int stackSize(int max) {
+        int v = RND.nextInt(100);
+        int size = v < 15 ? 1 : v < 35 ? 16 : v < 60 ? 32 : 64;
+        return Math.min(size, max);
+    }
+
     void addAh(int n) {
         List<Item> pool = m.pool;
         if (pool.isEmpty()) return;
@@ -150,7 +158,7 @@ public final class Market {
             boolean plain = ench.isEmpty();
             if (plain && ahCount.getOrDefault(id, 0) >= capFor(id)) continue;
             int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-            int count = plain && max > 1 ? 1 + RND.nextInt(max) : 1;
+            int count = plain && max > 1 ? stackSize(max) : 1;
             m.ah.botList(new Stack(id, count, ench), RND);
             if (plain) ahCount.merge(id, 1, Integer::sum);
             made++;
@@ -190,11 +198,14 @@ public final class Market {
     // ---------- Takt ----------
     void tick(int t) {
         if (m.pool.isEmpty()) return;
-        int batch = 5000;   // Aufbau verteilt auf viele Ticks
-        long needAh = minAh - m.ah.size();
-        if (needAh > 0) addAh((int) Math.min(batch, needAh));
-        long needOrd = minOrders - m.orders.size();
-        if (needOrd > 0) addOrders((int) Math.min(batch, needOrd));
+        // Aufbau nur mit begrenzter Rechenzeit pro Tick (auf schwachen PCs weniger), damit nichts ruckelt
+        long end = System.nanoTime() + Perf.BUDGET_NS;
+        while (System.nanoTime() < end) {
+            boolean did = false;
+            if (m.ah.size() < minAh) { addAh(100); did = true; }
+            if (m.orders.size() < minOrders) { addOrders(100); did = true; }
+            if (!did) break;
+        }
         if (t % 20 == 0) churn();
     }
 

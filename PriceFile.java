@@ -32,7 +32,7 @@ public class PriceFile {
             Map.entry("minecraft:dragon_egg", 5_000_000L),
             Map.entry("minecraft:netherite_upgrade_smithing_template", 400_000L));
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v4.json"); }
+    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v5.json"); }
 
     public static void loadInto(PriceBook prices) {
         try {
@@ -62,15 +62,15 @@ public class PriceFile {
             {"helmet", "5"}, {"chestplate", "8"}, {"leggings", "7"}, {"boots", "4"}, {"horse_armor", "6"}, {"spear", "2"}};
     static final Object[][] WORDS = {
             {"spawn_egg", 5000}, {"smithing_template", 8000}, {"music_disc", 3000}, {"banner_pattern", 1500},
-            {"pottery_sherd", 700}, {"_head", 2500}, {"skull", 2500}, {"shulker_box", 3500}, {"_ore", 150},
-            {"raw_", 120}, {"nugget", 15}, {"stripped_", 24}, {"_log", 20}, {"_wood", 22}, {"planks", 6},
-            {"_stairs", 9}, {"_slab", 5}, {"_wall", 8}, {"_fence", 10}, {"_door", 25}, {"trapdoor", 25},
-            {"_sign", 20}, {"chest_boat", 90}, {"_boat", 60}, {"_wool", 25}, {"carpet", 10},
-            {"concrete_powder", 18}, {"concrete", 20}, {"glazed_terracotta", 25}, {"terracotta", 15},
-            {"stained_glass", 25}, {"glass", 12}, {"_bed", 120}, {"_dye", 20}, {"candle", 30}, {"coral", 60},
-            {"sapling", 40}, {"seeds", 15}, {"leaves", 5}, {"_button", 12}, {"pressure_plate", 15},
-            {"potion", 400}, {"_banner", 120}, {"minecart", 200}, {"rail", 40}, {"_bricks", 14}, {"brick", 12},
-            {"copper", 30}};
+            {"pottery_sherd", 700}, {"_head", 2500}, {"skull", 2500}, {"shulker_box", 3500}, {"_ore", 50},
+            {"raw_", 40}, {"nugget", 5}, {"stripped_", 6}, {"_log", 6}, {"_wood", 6}, {"planks", 2},
+            {"_stairs", 3}, {"_slab", 2}, {"_wall", 3}, {"_fence", 4}, {"_door", 8}, {"trapdoor", 8},
+            {"_sign", 6}, {"chest_boat", 25}, {"_boat", 20}, {"_wool", 6}, {"carpet", 3},
+            {"concrete_powder", 5}, {"concrete", 6}, {"glazed_terracotta", 10}, {"terracotta", 5},
+            {"stained_glass", 6}, {"glass", 4}, {"_bed", 40}, {"_dye", 6}, {"candle", 12}, {"coral", 15},
+            {"sapling", 8}, {"seeds", 3}, {"leaves", 1}, {"_button", 3}, {"pressure_plate", 5},
+            {"potion", 150}, {"_banner", 40}, {"minecart", 60}, {"rail", 12}, {"_bricks", 5}, {"brick", 4},
+            {"copper", 10}};
 
     static long estimate(Item item, String id) {
         String p = id.substring(id.indexOf(':') + 1);
@@ -86,10 +86,10 @@ public class PriceFile {
         }
         for (Object[] w : WORDS) if (p.contains((String) w[0])) return ((Number) w[1]).doubleValue();
         ItemStack d = item.getDefaultInstance();
-        double[] rarity = {50, 400, 2500, 15000};
+        double[] rarity = {3, 40, 400, 4000};
         double r = rarity[Math.min(d.getRarity().ordinal(), 3)];
         int ms = d.getMaxStackSize();
-        double f = ms >= 64 ? 1 : ms >= 16 ? 2.5 : 4;
-        return r * f + Math.max(0, d.getMaxDamage()) * 3;
+        double f = ms >= 64 ? 1 : ms >= 16 ? 2 : 3;
+        return r * f + Math.max(0, d.getMaxDamage()) * 1;
     }
 }

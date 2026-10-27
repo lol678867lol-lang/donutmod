@@ -37,7 +37,7 @@ public final class Homes {
 
     static final Map<UUID, Map<String, Home>> DATA = new HashMap<>();
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-homes.json"); }
+    static Path file() { return DonutMod.worldDir().resolve("donutmod-homes.json"); }
 
     static String dimId(Level l) {
         String s = l.dimension().toString();   // ResourceKey[minecraft:dimension / minecraft:overworld]
@@ -70,6 +70,13 @@ public final class Homes {
         String cmd = String.format(Locale.ROOT, "execute in %s run tp %s %f %f %f %f %f", h.dim, p.getUUID(), h.x, h.y, h.z, h.yaw, h.pitch);
         srv.getCommands().performPrefixedCommand(srv.createCommandSourceStack().withSuppressedOutput(), cmd);
         Gui.say(p, "§aTeleportiert zu §f" + h.name + "§a.");
+    }
+
+    /** Teleport ohne Home (fuer /rtp). */
+    static void tpRaw(ServerPlayer p, String dim, double x, double y, double z, float yaw, float pitch) {
+        MinecraftServer srv = DonutMod.INSTANCE.srv;
+        String cmd = String.format(Locale.ROOT, "execute in %s run tp %s %f %f %f %f %f", dim, p.getUUID(), x, y, z, yaw, pitch);
+        srv.getCommands().performPrefixedCommand(srv.createCommandSourceStack().withSuppressedOutput(), cmd);
     }
 
     static Item icon(Home h) {
@@ -109,6 +116,7 @@ public final class Homes {
     }
 
     static void load() {
+        DATA.clear();
         try {
             if (!Files.exists(file())) return;
             Map<String, Map<String, Home>> in = GSON.fromJson(Files.readString(file()),

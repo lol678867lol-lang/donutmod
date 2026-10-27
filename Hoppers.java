@@ -15,7 +15,7 @@ import java.util.Set;
 /** Hopper schaffen ca. 12 Items pro Tick: Cooldown wird zurueckgesetzt und der Hopper-Tick mehrfach ausgefuehrt. */
 public final class Hoppers {
     private Hoppers() {}
-    static final int SPEED = 12;
+    static final int SPEED = Perf.HOPPER_SPEED;
     static final Set<HopperBlockEntity> TRACKED = Collections.newSetFromMap(new IdentityHashMap<>());
 
     static void register() {
