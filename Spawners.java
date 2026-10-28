@@ -185,8 +185,11 @@ public final class Spawners {
     }
 
     /** Registriert einen Welt-Spawner (z.B. in Basen), der Items statt Mobs herstellt. */
-    static void registerAt(ServerLevel level, BlockPos pos, String type) {
+    static void registerAt(ServerLevel level, BlockPos pos, String type) { registerAt(level, pos, type, 1); }
+
+    static void registerAt(ServerLevel level, BlockPos pos, String type, int stack) {
         Sp s = new Sp();
+        s.stack = Math.max(1, stack);
         s.dim = level.dimension().toString();
         s.x = pos.getX(); s.y = pos.getY(); s.z = pos.getZ();
         s.type = type; s.owner = "world";

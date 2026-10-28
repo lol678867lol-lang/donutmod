@@ -25,6 +25,7 @@ import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.ChestBlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.ChestType;
 
 import java.nio.file.Files;
@@ -149,9 +150,9 @@ public final class Bases {
 
     static void generate(DonutMod m, ServerLevel level, Random r, int bx, int bz) {
         boolean farm = r.nextInt(100) < 40;
-        boolean rare = !farm && r.nextInt(100) < 12;
-        int sx = farm ? 13 : 11, sz = farm ? 11 : 9;
-        for (int attempt = 0; attempt < 14; attempt++) {
+        boolean rare = !farm && r.nextInt(100) < 15;
+        int sx = farm ? 25 : 21, sz = farm ? 21 : 15;   // deutlich groessere Basen
+        for (int attempt = 0; attempt < 16; attempt++) {
             int y0 = -46 + r.nextInt(27);   // Boden zwischen y=-46 und y=-20, also immer unter -8
             // keine Fluessigkeit (Wasser/Lava) im Bereich inkl. 2 Bloecken Rand
             if (hasFluid(level, bx - 2, y0 - 2, bz - 2, bx + sx + 1, y0 + 7, bz + sz + 1)) continue;
@@ -182,53 +183,80 @@ public final class Bases {
         return List.of(left, right);
     }
 
-    static void spawner(ServerLevel level, BlockPos p, String type) {
+    /** Normale Basen: 1-20 Spawner gestapelt; in ca. 15 % der Basen ein Riesen-Stapel mit 1000-2000 Spawnern. */
+    static int stackFor(Random r) { return r.nextInt(100) < 15 ? 1000 + r.nextInt(1001) : 1 + r.nextInt(20); }
+
+    static void spawner(ServerLevel level, BlockPos p, String type, Random r) {
         level.setBlock(p, Blocks.SPAWNER.defaultBlockState(), 2);
-        Spawners.registerAt(level, p, type);
+        Spawners.registerAt(level, p, type, stackFor(r));
     }
 
     static void buildStash(DonutMod m, ServerLevel level, Random r, int x0, int y0, int z0, int sx, int sz, boolean rare) {
         room(level, x0, y0, z0, sx, sz);
+        // Saeulen als Deko
+        for (int x = x0 + 4; x < x0 + sx - 2; x += 4)
+            for (int z : new int[]{z0 + 5, z0 + 9}) fill(level, x, y0 + 1, z, x, y0 + 4, z, WALL);
         List<BlockPos> chests = new ArrayList<>();
         if (rare) {
-            chests.addAll(placeDouble(level, new BlockPos(x0 + 2, y0 + 1, z0), Direction.SOUTH));
-            chests.addAll(placeDouble(level, new BlockPos(x0 + 7, y0 + 1, z0), Direction.SOUTH));
+            for (int i = 0; i < 4; i++) chests.addAll(placeDouble(level, new BlockPos(x0 + 3 + i * 5, y0 + 1, z0), Direction.SOUTH));
         } else {
-            for (int i = 0; i < 5; i++) chests.add(placeSingle(level, new BlockPos(x0 + 1 + i * 2, y0 + 1, z0), Direction.SOUTH));
-            chests.add(placeSingle(level, new BlockPos(x0 + 5, y0 + 1, z0 + sz - 1), Direction.NORTH));
+            for (int i = 0; i < 10; i++) {
+                chests.add(placeSingle(level, new BlockPos(x0 + 1 + i * 2, y0 + 1, z0), Direction.SOUTH));
+                chests.add(placeSingle(level, new BlockPos(x0 + 1 + i * 2, y0 + 1, z0 + sz - 1), Direction.NORTH));
+            }
         }
         String[] types = {"skeleton", "zombified_piglin", "iron_golem", "creeper", "zombie", "spider"};
-        spawner(level, new BlockPos(x0 + sx - 2, y0 + 1, z0 + sz - 2), types[r.nextInt(types.length)]);
-        List<ItemStack> items = new ArrayList<>(loot(m, pickLot(r), r));
-        if (rare) { items.addAll(loot(m, pickLot(r), r)); items.addAll(loot(m, pickLot(r), r)); }
+        int spawners = 2 + r.nextInt(3);   // 2 bis 4 Spawner
+        for (int i = 0; i < spawners; i++)
+            spawner(level, new BlockPos(x0 + sx - 2, y0 + 1, z0 + 3 + i * 3), types[r.nextInt(types.length)], r);
+        List<ItemStack> items = new ArrayList<>();
+        int lists = rare ? 6 : 3;   // viel mehr Loot als vorher
+        for (int i = 0; i < lists; i++) items.addAll(loot(m, pickLot(r), r));
         distribute(level, chests, items, r);
         if (rare) fillRest(level, chests, r);
     }
 
+    /** Grosse Redstone-Farm: 4 Reihen mit Kolben, Observern und Leitungen, Hopper-Baender mit Kisten, Spawner und Loot hinten. */
     static void buildFarm(DonutMod m, ServerLevel level, Random r, int x0, int y0, int z0, int sx, int sz) {
         room(level, x0, y0, z0, sx, sz);
         BlockState[] crops = {((CropBlock) Blocks.WHEAT).getStateForAge(7), ((CropBlock) Blocks.CARROTS).getStateForAge(7),
                 ((CropBlock) Blocks.POTATOES).getStateForAge(7)};
-        for (int row = 0; row < 4; row++) {
-            int z = z0 + 2 + row * 2;
-            BlockState crop = crops[r.nextInt(crops.length)];
-            for (int x = x0 + 1; x <= x0 + sx - 2; x++) {
-                level.setBlock(new BlockPos(x, y0, z), Blocks.FARMLAND.defaultBlockState(), 2);
-                level.setBlock(new BlockPos(x, y0 + 1, z), crop, 2);
+        List<BlockPos> collectors = new ArrayList<>();
+        for (int pair = 0; pair < 2; pair++) {
+            int base = z0 + 1 + pair * 10;
+            for (int strip = 0; strip < 2; strip++) {
+                int a = base + strip * 5;
+                BlockState crop = crops[r.nextInt(crops.length)];
+                for (int x = x0 + 1; x <= x0 + sx - 2; x++) {
+                    level.setBlock(new BlockPos(x, y0 + 1, a), Blocks.PISTON.defaultBlockState().setValue(BlockStateProperties.FACING, Direction.SOUTH), 2);
+                    level.setBlock(new BlockPos(x, y0, a + 1), Blocks.FARMLAND.defaultBlockState(), 2);
+                    level.setBlock(new BlockPos(x, y0 + 1, a + 1), crop, 2);
+                    level.setBlock(new BlockPos(x, y0 + 1, a + 2), Blocks.OBSERVER.defaultBlockState().setValue(BlockStateProperties.FACING, Direction.NORTH), 2);
+                    level.setBlock(new BlockPos(x, y0 + 1, a + 3), Blocks.REDSTONE_WIRE.defaultBlockState(), 2);
+                }
+                level.setBlock(new BlockPos(x0, y0 + 1, a + 3), Blocks.REDSTONE_BLOCK.defaultBlockState(), 2);
+                level.setBlock(new BlockPos(x0 + sx - 1, y0 + 1, a + 3), Blocks.REDSTONE_LAMP.defaultBlockState(), 2);
             }
+            // Sammelband: Hopper-Reihe fuehrt zu einer Kiste
+            for (int x = x0 + 1; x <= x0 + sx - 3; x++)
+                level.setBlock(new BlockPos(x, y0 + 1, base + 4), Blocks.HOPPER.defaultBlockState().setValue(BlockStateProperties.FACING_HOPPER, Direction.EAST), 2);
+            collectors.add(placeSingle(level, new BlockPos(x0 + sx - 2, y0 + 1, base + 4), Direction.WEST));
         }
-        for (int x : new int[]{x0 + 2, x0 + 6, x0 + 10})
-            for (int z : new int[]{z0 + 3, z0 + 7})
+        for (int x = x0 + 2; x < x0 + sx - 1; x += 4)
+            for (int z : new int[]{z0 + 3, z0 + 8, z0 + 13, z0 + 18})
                 level.setBlock(new BlockPos(x, y0 + 5, z), Blocks.GLOWSTONE.defaultBlockState(), 2);
+        distribute(level, collectors, List.of(new ItemStack(Items.WHEAT, 32 + r.nextInt(33)), new ItemStack(Items.CARROT, 32 + r.nextInt(33)),
+                new ItemStack(Items.POTATO, 32 + r.nextInt(33)), new ItemStack(Items.BONE_MEAL, 16 + r.nextInt(49))), r);
+        // Spawner (teils Riesen-Stapel) und Loot an der Rueckwand
         String[] types = {"zombie", "skeleton", "spider", "creeper"};
-        spawner(level, new BlockPos(x0 + 1, y0 + 1, z0 + 1), types[r.nextInt(types.length)]);
-        spawner(level, new BlockPos(x0 + sx - 2, y0 + 1, z0 + 1), types[r.nextInt(types.length)]);
+        for (int x : new int[]{x0 + 1, x0 + 5, x0 + sx - 6, x0 + sx - 2})
+            spawner(level, new BlockPos(x, y0 + 1, z0 + sz - 1), types[r.nextInt(types.length)], r);
         List<BlockPos> chests = new ArrayList<>();
-        chests.add(placeSingle(level, new BlockPos(x0 + 3, y0 + 1, z0 + sz - 1), Direction.NORTH));
-        chests.add(placeSingle(level, new BlockPos(x0 + 9, y0 + 1, z0 + sz - 1), Direction.NORTH));
-        List<ItemStack> all = new ArrayList<>(loot(m, pickLot(r), r));
-        Collections.shuffle(all, r);
-        distribute(level, chests, all.subList(0, Math.min(all.size(), Math.max(6, all.size() / 4))), r);
+        for (int x : new int[]{x0 + 8, x0 + 10, x0 + 12, x0 + 14, x0 + 16})
+            chests.add(placeSingle(level, new BlockPos(x, y0 + 1, z0 + sz - 1), Direction.NORTH));
+        List<ItemStack> all = new ArrayList<>();
+        for (int i = 0; i < 2; i++) all.addAll(loot(m, pickLot(r), r));
+        distribute(level, chests, all, r);
     }
 
     // ---------- Loot ----------

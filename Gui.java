@@ -78,7 +78,8 @@ public final class Gui {
             Map.entry("axt", "axe"), Map.entry("schaufel", "shovel"), Map.entry("hacke", "hoe"),
             Map.entry("helm", "helmet"), Map.entry("brustplatte", "chestplate"), Map.entry("hose", "leggings"),
             Map.entry("stiefel", "boots"), Map.entry("schild", "shield"), Map.entry("dia", "diamond"),
-            Map.entry("diamant", "diamond"), Map.entry("eisen", "iron"));
+            Map.entry("diamant", "diamond"), Map.entry("eisen", "iron"),
+            Map.entry("speed", "swiftness"), Map.entry("pot", "potion"), Map.entry("trank", "potion"));
 
     static String lastQ = null;
     static Query lastP = null;

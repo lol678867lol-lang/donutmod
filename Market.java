@@ -147,6 +147,11 @@ public final class Market {
         if (pool.isEmpty()) return;
         int made = 0, tries = 0;
         while (made < n && tries++ < n * 30) {
+            if (RND.nextInt(100) < 4) {   // ca. 4 % Traenke
+                m.ah.botList(new Stack(Custom.POTION_IDS.get(RND.nextInt(Custom.POTION_IDS.size())), 1, NONE), RND);
+                made++;
+                continue;
+            }
             Item it = pool.get(RND.nextInt(pool.size()));
             String id = m.idOf(it);
             boolean book = it == Items.ENCHANTED_BOOK;
@@ -170,6 +175,11 @@ public final class Market {
         if (pool.isEmpty()) return;
         int made = 0, tries = 0;
         while (made < n && tries++ < n * 30) {
+            if (RND.nextInt(100) < 4) {
+                m.orders.botOrder(Custom.POTION_IDS.get(RND.nextInt(Custom.POTION_IDS.size())), NONE, 8 + RND.nextInt(193), RND);
+                made++;
+                continue;
+            }
             Item it = pool.get(RND.nextInt(pool.size()));
             String id = m.idOf(it);
             boolean book = it == Items.ENCHANTED_BOOK;
