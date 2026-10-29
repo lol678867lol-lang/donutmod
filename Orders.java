@@ -7,6 +7,7 @@ public class Orders {
         public final int id; public final UUID owner; // owner == null -> Bot
         public final String itemId; public final Map<String, Integer> enchants;
         public int remaining; public final long pricePerItem;
+        public boolean removed;
         Order(int id, UUID owner, String itemId, Map<String, Integer> ench, int amount, long ppi) {
             this.id = id; this.owner = owner; this.itemId = itemId; this.enchants = ench;
             this.remaining = amount; this.pricePerItem = ppi;
@@ -28,6 +29,7 @@ public class Orders {
     }
 
     private boolean remove(Order o) {
+        o.removed = true;
         boolean r = orders.remove(o);
         List<Order> l = byItem.get(o.itemId);
         if (l != null) { l.remove(o); if (l.isEmpty()) byItem.remove(o.itemId); }

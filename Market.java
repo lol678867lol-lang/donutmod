@@ -242,7 +242,7 @@ public final class Market {
         }
         long now = System.currentTimeMillis();
         Long t = ahCacheTime.get(mode);
-        if (t == null || now - t > 60_000) {
+        if (t == null || now - t > 300_000) {
             List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
             switch (mode) {
                 case 1 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price));
@@ -258,7 +258,7 @@ public final class Market {
     /** Orders nach Preis, hoechster zuerst (60 s gecacht). */
     List<Orders.Order> ordersSorted() {
         long now = System.currentTimeMillis();
-        if (ordersCache == null || now - ordersCacheTime > 60_000) {
+        if (ordersCache == null || now - ordersCacheTime > 300_000) {
             List<Orders.Order> l = new ArrayList<>(m.orders.all());
             l.sort(Comparator.comparingLong((Orders.Order o) -> o.pricePerItem).reversed());
             ordersCache = l;

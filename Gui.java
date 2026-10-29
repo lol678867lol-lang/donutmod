@@ -295,7 +295,7 @@ public final class Gui {
                     DonutMod.ping(pl, SoundEvents.VILLAGER_YES, 1.0f);
                     say(pl, "§aGekauft für $" + DonutMod.fmt(l.price));
                 });
-        g.alive = l -> m.ah.all().contains(l);
+        g.alive = l -> !l.removed;
         g.extra(47, () -> named(Items.HOPPER, "§eSortierung", "§7Aktuell: §f" + sortNames[st[0]], "§7Klick: nächste Sortierung"),
                 () -> st[0] = (st[0] + 1) % 4);
         g.extra(48, () -> who[0] != null ? named(Items.PLAYER_HEAD, "§eSpieler: §f" + m.playerName(who[0]), "§7Klick: Filter löschen")
@@ -338,7 +338,7 @@ public final class Gui {
                             own ? "§eKlick: Order abbrechen (Geld zurück)" : "§aKlick: passende Items aus deinem Inventar liefern");
                 },
                 (o, pl) -> deliver(m, pl, o));
-        g.alive = o -> m.orders.all().contains(o);
+        g.alive = o -> !o.removed;
         g.extra(47, () -> mine[0]
                         ? named(Items.BARRIER, "§cAlle Orders", "§7Klick: alle Orders zeigen")
                         : named(Items.CHEST, "§bMeine Orders", "§7Klick: nur deine Orders zeigen", "",
@@ -388,7 +388,7 @@ public final class Gui {
         long pay = m.orders.fill(o, new Stack(o.itemId, got, o.enchants), pl.getUUID());
         if (owner != null) for (ItemStack c : taken) m.addPending(owner, c);
         m.prices.bump(o.itemId, -0.0004 * got);   // wird viel verkauft -> guenstiger
-        if (!m.orders.all().contains(o)) m.market.ordersRemoved(o);
+        if (o.removed) m.market.ordersRemoved(o);
         DonutMod.ping(pl, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.2f);
         say(pl, "§aGeliefert: " + got + "x für $" + DonutMod.fmt(pay));
     }

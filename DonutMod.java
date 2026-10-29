@@ -12,6 +12,8 @@ import net.fabricmc.api.ModInitializer;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.commands.CommandSourceStack;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.minecraft.network.chat.numbers.FixedFormat;
 import net.minecraft.world.level.storage.LevelResource;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
@@ -86,7 +88,7 @@ public class DonutMod implements ModInitializer {
         orders = new Orders(prices, meta, eco);
         ah = new AuctionHouse(prices, meta, eco);
         sell = new SellService(prices, orders, eco);
-        ahItems.clear(); pending.clear(); names.clear(); shulkerOn.clear(); boards.clear(); capCache.clear();
+        ahItems.clear(); pending.clear(); names.clear(); shulkerOn.clear(); boards.clear(); headBoards.clear(); capCache.clear();
         for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
         prices.sellFactor = 6.0 / PriceFile.MULT;
         meta.roll(META_POOL, 2, RND);
@@ -95,6 +97,8 @@ public class DonutMod implements ModInitializer {
     final Map<Integer, ItemStack> ahItems = new HashMap<>();
     /** Pro Spieler eigenes Sidebar-Scoreboard (rechts, mittig) mit dem eigenen Kontostand. */
     final Map<UUID, Objective> boards = new HashMap<>();
+    /** Geld ueber den Koepfen: BELOW_NAME-Anzeige je Betrachter. */
+    final Map<UUID, Objective> headBoards = new HashMap<>();
     static final Gson GSON = new Gson();
     static Path saveFile() { return worldDir().resolve("donutmod-balances.json"); }
 
@@ -135,6 +139,18 @@ public class DonutMod implements ModInitializer {
         Rtp.register();
         Bases.register();
         Tpa.register();
+
+        // Kill-Belohnung: der Moerder bekommt 10 % vom Geld des Opfers
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+            if (!(entity instanceof ServerPlayer victim) || !(source.getEntity() instanceof ServerPlayer killer) || killer == victim) return;
+            long amt = eco.get(victim.getUUID()) / 10;
+            if (amt <= 0) return;
+            eco.take(victim.getUUID(), amt);
+            eco.add(killer.getUUID(), amt);
+            srv.getPlayerList().broadcastSystemMessage(Component.literal("§c" + killer.getName().getString() + " §7hat §c"
+                    + victim.getName().getString() + " §7getötet und §a$" + fmtShort(amt) + " §7(10 %) erhalten."), false);
+            ping(killer, SoundEvents.PLAYER_LEVELUP, 1.2f);
+        });
         OrderBuilder.register(this);
 
         ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; resetState(); loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); loadMarket(); market = new Market(this); market.init(); seedCustom(); market.ensureCustomOrders(); });
@@ -147,7 +163,7 @@ public class DonutMod implements ModInitializer {
                 Gui.say(jp, "§eMarkt: wegen wenig Arbeitsspeicher nur " + fmt(market.minAh) + " Angebote und " + fmt(market.minOrders)
                         + " Orders. Gib Minecraft im Launcher mehr RAM, dann wird er groesser.");
         });
-        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> boards.remove(handler.getPlayer().getUUID()));
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> { boards.remove(handler.getPlayer().getUUID()); headBoards.remove(handler.getPlayer().getUUID()); });
 
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             int t = server.getTickCount();
@@ -190,6 +206,19 @@ public class DonutMod implements ModInitializer {
         p.connection.send(new ClientboundSetObjectivePacket(obj, 0));                 // 0 = erstellen
         p.connection.send(new ClientboundSetDisplayObjectivePacket(DisplaySlot.SIDEBAR, obj));
         sendMoney(p, obj);
+        Objective head = new Scoreboard().addObjective("donutmod_head", ObjectiveCriteria.DUMMY, Component.literal(" "),
+                ObjectiveCriteria.RenderType.INTEGER, false, BlankFormat.INSTANCE);
+        headBoards.put(p.getUUID(), head);
+        p.connection.send(new ClientboundSetObjectivePacket(head, 0));
+        p.connection.send(new ClientboundSetDisplayObjectivePacket(DisplaySlot.BELOW_NAME, head));
+        sendHeads(p, head, srv.getPlayerList().getPlayers());
+    }
+
+    /** Zeigt dem Betrachter das Geld aller Spieler unter/ueber deren Namen. */
+    void sendHeads(ServerPlayer viewer, Objective head, List<ServerPlayer> all) {
+        for (ServerPlayer t : all)
+            viewer.connection.send(new ClientboundSetScorePacket(t.getScoreboardName(), head.getName(), 0, Optional.empty(),
+                    Optional.of(new FixedFormat(Component.literal("§a$" + fmtShort(eco.get(t.getUUID())))))));
     }
 
     void sendMoney(ServerPlayer p, Objective obj) {
@@ -203,11 +232,13 @@ public class DonutMod implements ModInitializer {
         for (ServerPlayer p : server.getPlayerList().getPlayers()) {
             Objective obj = boards.get(p.getUUID());
             if (obj == null) createBoard(p); else sendMoney(p, obj);
+            Objective h = headBoards.get(p.getUUID());
+            if (h != null) sendHeads(p, h, server.getPlayerList().getPlayers());
         }
     }
 
     // ---- Bot-Logik ----
-    static final long REQ_AH = 3_000_000L, REQ_ORDERS = 1_500_000L;   // Wunsch; wird bei wenig RAM automatisch verkleinert
+    static final long REQ_AH = 1_000_000L, REQ_ORDERS = 500_000L;   // Wunsch; wird bei wenig RAM automatisch verkleinert
     Market market;
     static final double BOT_ORDER_FILL = 0.01;   // Chance pro Minute, dass ein Bot-Order teilweise gefuellt wird
     static final Map<String, Item> ITEM_BY_ID = new HashMap<>();
@@ -525,6 +556,17 @@ public class DonutMod implements ModInitializer {
         } catch (Exception e) { return -1; }
     }
 
+    /** Kurzform: 1.5k, 2.3m, 1b, 4t. */
+    static String fmtShort(long n) {
+        String s;
+        if (n >= 1_000_000_000_000L) s = String.format(Locale.ROOT, "%.2f", n / 1e12) + "t";
+        else if (n >= 1_000_000_000L) s = String.format(Locale.ROOT, "%.2f", n / 1e9) + "b";
+        else if (n >= 1_000_000L) s = String.format(Locale.ROOT, "%.2f", n / 1e6) + "m";
+        else if (n >= 1_000L) s = String.format(Locale.ROOT, "%.1f", n / 1e3) + "k";
+        else return String.valueOf(n);
+        return s.replace(".00", "").replace(".0k", "k");
+    }
+
     static String fmt(long n) { return String.format(Locale.GERMANY, "%,d", n); }
 
     // ---- Commands ----
@@ -576,8 +618,19 @@ public class DonutMod implements ModInitializer {
                 .then(Commands.argument("item", StringArgumentType.greedyString())
                         .executes(c -> worth(c, StringArgumentType.getString(c, "item")))));
 
-        d.register(Commands.literal("bal").executes(c -> msg(c,
-                "§eKontostand: §a$" + fmt(eco.get(c.getSource().getPlayerOrException().getUUID())))));
+        d.register(Commands.literal("bal")
+                .executes(c -> {
+                    long b = eco.get(c.getSource().getPlayerOrException().getUUID());
+                    return msg(c, "§eKontostand: §a$" + fmt(b) + " §7(" + fmtShort(b) + ")");
+                })
+                .then(Commands.argument("spieler", StringArgumentType.word())
+                        .suggests((ctx, sb) -> SharedSuggestionProvider.suggest(names.values(), sb))
+                        .executes(c -> {
+                            String n = StringArgumentType.getString(c, "spieler");
+                            UUID u = uuidOfName(n);
+                            if (u == null) return msg(c, "§cSpieler unbekannt: " + n);
+                            return msg(c, "§e" + names.getOrDefault(u, n) + " hat §a$" + fmtShort(eco.get(u)) + " §7($" + fmt(eco.get(u)) + ")");
+                        })));
 
         d.register(Commands.literal("meta").executes(c -> {
             StringBuilder sb = new StringBuilder("§6Aktuelle Metas:");

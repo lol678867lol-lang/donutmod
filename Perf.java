@@ -6,6 +6,6 @@ public final class Perf {
     static final boolean LITE = Runtime.getRuntime().availableProcessors() <= 4
             || Runtime.getRuntime().maxMemory() < (3L << 30);
     /** Maximale Rechenzeit pro Tick fuer den Markt-Aufbau. */
-    static final long BUDGET_NS = LITE ? 3_000_000L : 10_000_000L;
+    static final long BUDGET_NS = LITE ? 2_000_000L : 4_000_000L;
     static final int HOPPER_SPEED = LITE ? 4 : 12;
 }

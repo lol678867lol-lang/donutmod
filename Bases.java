@@ -13,6 +13,7 @@ import net.minecraft.core.component.DataComponents;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
 import net.minecraft.world.item.alchemy.PotionContents;
@@ -55,12 +56,44 @@ public final class Bases {
     static final BlockState FLOOR = Blocks.POLISHED_DEEPSLATE.defaultBlockState();
     static final BlockState AIR = Blocks.AIR.defaultBlockState();
 
+    static final class Farm { String dim; int x, y, z; }
+    static final List<Farm> FARMS = new ArrayList<>();
+    static Path farmFile() { return DonutMod.worldDir().resolve("donutmod-farms.json"); }
+
+    static void addItem(ChestBlockEntity c, ItemStack st) {
+        for (int i = 0; i < 27 && !st.isEmpty(); i++) {
+            ItemStack cur = c.getItem(i);
+            if (!cur.isEmpty() && ItemStack.isSameItemSameComponents(cur, st) && cur.getCount() < cur.getMaxStackSize()) {
+                int add = Math.min(st.getCount(), cur.getMaxStackSize() - cur.getCount());
+                cur.grow(add);
+                st.shrink(add);
+            }
+        }
+        for (int i = 0; i < 27 && !st.isEmpty(); i++)
+            if (c.getItem(i).isEmpty()) { c.setItem(i, st.copy()); st.setCount(0); }
+    }
+
+    /** Jede Minute: die Sammelkisten der Redstone-Farmen fuellen sich mit Ernte (nur wo der Chunk geladen ist). */
+    static void produce(MinecraftServer server) {
+        Item[] crops = {Items.WHEAT, Items.CARROT, Items.POTATO};
+        for (Farm f : FARMS) {
+            ServerLevel lvl = null;
+            for (ServerLevel l : server.getAllLevels()) if (l.dimension().toString().equals(f.dim)) { lvl = l; break; }
+            if (lvl == null || !lvl.hasChunk(f.x >> 4, f.z >> 4)) continue;
+            BlockEntity be = lvl.getBlockEntity(new BlockPos(f.x, f.y, f.z));
+            if (!(be instanceof ChestBlockEntity c)) continue;
+            for (Item it : crops) addItem(c, new ItemStack(it, 6 + DonutMod.RND.nextInt(15)));
+            c.setChanged();
+        }
+    }
+
     static Path file() { return DonutMod.worldDir().resolve("donutmod-bases.json"); }
 
     static void register() {
         ServerTickEvents.END_SERVER_TICK.register(server -> {
             int t = server.getTickCount();
             if (t % 40 == 0) scan(server);
+            if (t % 1200 == 0) produce(server);
             if (t % 6000 == 0) save();
         });
         ServerLifecycleEvents.SERVER_STARTED.register(s -> load());
@@ -83,12 +116,19 @@ public final class Bases {
     }
 
     static void save() {
-        try { Files.writeString(file(), GSON.toJson(new ArrayList<>(DONE))); }
+        try {
+            Files.writeString(file(), GSON.toJson(new ArrayList<>(DONE)));
+            Files.writeString(farmFile(), GSON.toJson(new ArrayList<>(FARMS)));
+        }
         catch (Exception e) { System.err.println("[DonutMod] Basen speichern fehlgeschlagen: " + e); }
     }
 
     static void load() {
         DONE.clear();
+        FARMS.clear();
+        try {
+            if (Files.exists(farmFile())) { Farm[] fa = GSON.fromJson(Files.readString(farmFile()), Farm[].class); if (fa != null) Collections.addAll(FARMS, fa); }
+        } catch (Exception e) { System.err.println("[DonutMod] Farmen laden fehlgeschlagen: " + e); }
         try {
             if (!Files.exists(file())) return;
             String[] arr = GSON.fromJson(Files.readString(file()), String[].class);
@@ -240,7 +280,11 @@ public final class Bases {
             // Sammelband: Hopper-Reihe fuehrt zu einer Kiste
             for (int x = x0 + 1; x <= x0 + sx - 3; x++)
                 level.setBlock(new BlockPos(x, y0 + 1, base + 4), Blocks.HOPPER.defaultBlockState().setValue(BlockStateProperties.FACING_HOPPER, Direction.EAST), 2);
-            collectors.add(placeSingle(level, new BlockPos(x0 + sx - 2, y0 + 1, base + 4), Direction.WEST));
+            BlockPos col = placeSingle(level, new BlockPos(x0 + sx - 2, y0 + 1, base + 4), Direction.WEST);
+            collectors.add(col);
+            Farm farm = new Farm();
+            farm.dim = level.dimension().toString(); farm.x = col.getX(); farm.y = col.getY(); farm.z = col.getZ();
+            FARMS.add(farm);
         }
         for (int x = x0 + 2; x < x0 + sx - 1; x += 4)
             for (int z : new int[]{z0 + 3, z0 + 8, z0 + 13, z0 + 18})

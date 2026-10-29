@@ -6,6 +6,7 @@ public class AuctionHouse {
     public static final class Listing {
         public final int id; public final UUID seller; // null -> Bot
         public final Stack stack; public final long price;
+        public boolean removed;   // schneller "gibt es noch"-Check statt Listensuche
         Listing(int id, UUID seller, Stack stack, long price) { this.id = id; this.seller = seller; this.stack = stack; this.price = price; }
     }
 
@@ -42,7 +43,18 @@ public class AuctionHouse {
 
     public int size() { return listings.size(); }
 
+    /**
+     * Chance pro Minute, dass Bots ein Spieler-Angebot kaufen. Zum Marktwert: ca. 13 % -> im Schnitt nach 5-10 Minuten.
+     * Guenstiger = schneller, teurer = deutlich langsamer.
+     */
+    private double playerChance(Listing l) {
+        double market = prices.stackPrice(l.stack);
+        double ratio = market / Math.max(1.0, (double) l.price);
+        return Math.max(0.0, Math.min(0.9, 0.13 * ratio * ratio * ratio));
+    }
+
     private boolean removeListing(Listing l) {
+        l.removed = true;
         boolean r = listings.remove(l);
         if (l.seller != null) playerListings.remove(l);
         return r;
@@ -52,7 +64,7 @@ public class AuctionHouse {
     public List<Listing> botBuyPlayerListings(Random rnd) {
         List<Listing> sold = new ArrayList<>();
         for (Listing l : new ArrayList<>(playerListings))
-            if (rnd.nextDouble() < buyChance(l)) {
+            if (rnd.nextDouble() < playerChance(l)) {
                 eco.add(l.seller, l.price);
                 removeListing(l);
                 sold.add(l);
@@ -67,7 +79,7 @@ public class AuctionHouse {
         while (out.size() < n && !listings.isEmpty() && tries++ < n * 20) {
             int i = rnd.nextInt(listings.size());
             Listing l = listings.get(i);
-            if (l.seller == null) { listings.remove(i); out.add(l); }
+            if (l.seller == null) { l.removed = true; listings.remove(i); out.add(l); }
         }
         return out;
     }
@@ -86,7 +98,7 @@ public class AuctionHouse {
 
     /** Spieler kauft. */
     public boolean buy(UUID buyer, Listing l) {
-        if (!listings.contains(l) || !eco.take(buyer, l.price)) return false;
+        if (l.removed || !eco.take(buyer, l.price)) return false;
         if (l.seller != null) eco.add(l.seller, l.price);
         removeListing(l);
         return true;
