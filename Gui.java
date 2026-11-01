@@ -348,8 +348,17 @@ public final class Gui {
         g.extra(48, () -> who[0] != null ? named(Items.PLAYER_HEAD, "§eSpieler: §f" + m.playerName(who[0]), "§7Klick: Filter löschen")
                         : q[0].isEmpty() ? pane() : named(Items.NAME_TAG, "§eSuche: §f" + q[0], "§7Klick: Suche löschen"),
                 () -> { q[0] = ""; who[0] = null; g.page = 0; });
-        g.extra(50, () -> mine[0] ? named(Items.ANVIL, "§aNeue Order erstellen", "§7Klick: Item im Chat suchen, dann Menge,", "§7Preis und Verzauberungen einstellen") : pane(),
-                () -> { if (mine[0]) OrderBuilder.start(m, p); });
+        g.extra(50, () -> {
+            if (mine[0]) return named(Items.ANVIL, "§aNeue Order erstellen", "§7Klick: Item im Chat suchen, dann Menge,", "§7Preis und Verzauberungen einstellen");
+            long v = sellToOrders(m, p, false);
+            return named(Items.EMERALD, "§aAlles verkaufen: §f$" + DonutMod.fmt(v), "§7Liefert alle passenden Items aus deinem",
+                    "§7Inventar an die bestbezahlten Orders.", "§7Du bekommst: §a$" + DonutMod.fmt(v));
+        }, () -> {
+            if (mine[0]) { OrderBuilder.start(m, p); return; }
+            long v = sellToOrders(m, p, true);
+            if (v > 0) { DonutMod.ping(p, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.0f); say(p, "§aAn Orders verkauft für $" + DonutMod.fmt(v)); }
+            else say(p, "§7Keine passenden Orders für dein Inventar.");
+        });
         g.extra(51, () -> named(Items.ENDER_CHEST, "§dAbholen",
                         "§7Gelieferte Items: §f" + m.pendingCount(p.getUUID()), "§7Klick: Lager öffnen"),
                 () -> openStorage(m, p));
@@ -391,6 +400,37 @@ public final class Gui {
         if (o.removed) m.market.ordersRemoved(o);
         DonutMod.ping(pl, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.2f);
         say(pl, "§aGeliefert: " + got + "x für $" + DonutMod.fmt(pay));
+    }
+
+    /** Alles aus dem Inventar an die bestbezahlten Orders liefern. apply=false: nur den Erloes berechnen (Vorschau). */
+    static long sellToOrders(DonutMod m, ServerPlayer p, boolean apply) {
+        Inventory inv = p.getInventory();
+        long total = 0;
+        Map<Orders.Order, Integer> used = new IdentityHashMap<>();
+        for (int i = 0; i < 36; i++) {
+            ItemStack s = inv.getItem(i);
+            if (s.isEmpty()) continue;
+            Stack ts = DonutMod.toStack(s);
+            int left = s.getCount();
+            for (Orders.Order o : m.orders.forItem(ts.id())) {
+                if (left <= 0) break;
+                if (o.removed || p.getUUID().equals(o.owner) || !satisfies(ts, o.enchants)) continue;
+                int rem = o.remaining - used.getOrDefault(o, 0);
+                if (rem <= 0) continue;
+                int n = Math.min(left, rem);
+                used.merge(o, n, Integer::sum);
+                left -= n;
+                if (apply) {
+                    ItemStack taken = s.copyWithCount(n);
+                    total += m.orders.fill(o, new Stack(ts.id(), n, o.enchants), p.getUUID());
+                    if (o.owner != null) m.addPending(o.owner, taken);
+                    m.prices.bump(o.itemId, -0.0004 * n);
+                    if (o.removed) m.market.ordersRemoved(o);
+                } else total += (long) n * o.pricePerItem;
+            }
+            if (apply && left != s.getCount()) { s.setCount(left); if (left <= 0) inv.setItem(i, ItemStack.EMPTY); }
+        }
+        return total;
     }
 
     // ---------- Lager (gelieferte Order-Items) ----------
@@ -529,7 +569,7 @@ public final class Gui {
         refresh.run();
         p.openMenu(new SimpleMenuProvider((id, inv, pl) ->
                 new Menu(id, inv, box, false, Set.of(53),
-                        (slot, sp) -> { sellAll(m, box, sp); sp.closeContainer(); },
+                        (slot, sp) -> { sellAll(m, box, sp); refresh.run(); },
                         refresh, sp -> sellAll(m, box, sp)),
                 Component.literal("Sell - Items reinlegen")));
     }

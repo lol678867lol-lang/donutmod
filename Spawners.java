@@ -87,7 +87,7 @@ public final class Spawners {
         if (s.contains("minecraft:creeper")) return "creeper";
         if (s.contains("minecraft:iron_golem")) return "iron_golem";
         if (s.contains("minecraft:spider") || s.contains("minecraft:cave_spider")) return "spider";
-        return "zombie";
+        return null;   // unbekannter Typ: nichts erfinden
     }
 
     static void register() {
@@ -106,6 +106,7 @@ public final class Spawners {
                     int add = Math.min(held.getCount(), MAX_STACK - sp.stack);
                     held.shrink(add);
                     sp.stack += add;
+                    save();
                     Gui.say(p, "§aSpawner gestapelt: §f" + sp.stack + "x");
                     return InteractionResult.SUCCESS;
                 }
@@ -118,9 +119,16 @@ public final class Spawners {
         });
 
         PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, be) -> {
-            if (!state.is(Blocks.SPAWNER) || world.isClientSide() || silk(player.getMainHandItem())) return true;
-            if (player instanceof ServerPlayer sp) Gui.say(sp, "§cSpawner lassen sich nur mit Silk Touch abbauen.");
-            return false;
+            if (!state.is(Blocks.SPAWNER) || world.isClientSide()) return true;
+            if (!silk(player.getMainHandItem())) {
+                if (player instanceof ServerPlayer sp) Gui.say(sp, "§cSpawner lassen sich nur mit Silk Touch abbauen.");
+                return false;
+            }
+            if (world instanceof ServerLevel level && !MAP.containsKey(key(level, pos)) && detect(level, be) == null) {
+                if (player instanceof ServerPlayer sp) Gui.say(sp, "§cUnbekannter Spawner-Typ, er bleibt stehen.");
+                return false;
+            }
+            return true;
         });
 
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> {
@@ -129,6 +137,7 @@ public final class Spawners {
             int take = sp.isShiftKeyDown() ? 64 : 1;   // Sneaken: 64 Spawner auf einmal abbauen
             if (reg != null && reg.stack > take) {
                 reg.stack -= take;
+                save();
                 level.setBlock(pos, Blocks.SPAWNER.defaultBlockState(), 3);
                 ItemStack part = Custom.make("donutmod:spawner_" + reg.type);
                 part.setCount(take);
@@ -137,8 +146,9 @@ public final class Spawners {
                 return;
             }
             int whole = reg != null ? reg.stack : 1;
-            if (reg != null) MAP.remove(key(level, pos));
+            if (reg != null) { MAP.remove(key(level, pos)); save(); }
             String type = reg != null ? reg.type : detect(level, be);
+            if (type == null) return;
             if (reg != null) {
                 for (Map.Entry<String, Long> e : reg.store.entrySet()) {
                     Item it = DonutMod.ITEM_BY_ID.get(e.getKey());
@@ -173,6 +183,7 @@ public final class Spawners {
                     s.x = p.pos.getX(); s.y = p.pos.getY(); s.z = p.pos.getZ();
                     s.type = p.type; s.owner = p.owner.toString();
                     MAP.put(k, s);
+                    save();
                     it.remove();
                 } else if (p.age > 20) it.remove();
             }
@@ -210,7 +221,7 @@ public final class Spawners {
     }
 
     static void save() {
-        try { Files.writeString(file(), GSON.toJson(new ArrayList<>(MAP.values()))); }
+        try { DonutMod.writeSafe(file(), GSON.toJson(new ArrayList<>(MAP.values()))); }
         catch (Exception e) { System.err.println("[DonutMod] Spawner speichern fehlgeschlagen: " + e); }
     }
 
@@ -258,7 +269,14 @@ public final class Spawners {
         g.extra(48, () -> Gui.named(Items.TNT, "§cAlles droppen", "§7Droppt alles (max. 40 Stacks pro Item pro Klick)"), () -> {
             for (String id : new ArrayList<>(s.store.keySet())) dropItem(p, s, id);
         });
-        g.extra(50, () -> Gui.named(Items.EMERALD, "§aAlles verkaufen", "§7Verkauft alles zum Sell-Preis"), () -> {
+        g.extra(50, () -> {
+            List<Stack> pv = new ArrayList<>();
+            for (Map.Entry<String, Long> e : s.store.entrySet())
+                if (e.getValue() > 0) pv.add(new Stack(e.getKey(), (int) Math.min(e.getValue(), Integer.MAX_VALUE), Map.of()));
+            long v = pv.isEmpty() ? 0 : m.sell.preview(pv);
+            return Gui.named(Items.EMERALD, "§aAlles verkaufen: §f$" + DonutMod.fmt(v), "§7Du bekommst: §a$" + DonutMod.fmt(v),
+                    "§7Klick: alles zum Sell-Preis verkaufen");
+        }, () -> {
             List<Stack> list = new ArrayList<>();
             for (Map.Entry<String, Long> e : s.store.entrySet())
                 if (e.getValue() > 0) list.add(new Stack(e.getKey(), (int) Math.min(e.getValue(), Integer.MAX_VALUE), Map.of()));

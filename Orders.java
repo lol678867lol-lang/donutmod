@@ -23,6 +23,13 @@ public class Orders {
     public List<Order> all() { return Collections.unmodifiableList(orders); }
     public int size() { return orders.size(); }
 
+    /** Offene Orders fuer ein Item, bestbezahlte zuerst. */
+    public List<Order> forItem(String id) {
+        List<Order> l = new ArrayList<>(byItem.getOrDefault(id, List.of()));
+        l.sort(Comparator.comparingLong((Order o) -> o.pricePerItem).reversed());
+        return l;
+    }
+
     private void add(Order o) {
         orders.add(o);
         byItem.computeIfAbsent(o.itemId, k -> new ArrayList<>()).add(o);

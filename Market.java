@@ -127,6 +127,7 @@ public final class Market {
     /** Bot-Orders: guenstige Items werden in riesigen Mengen geordert (z.B. 10 Mio. Kelp). */
     int botAmount(Item it, String id, boolean plain) {
         if (!plain) return 1 + RND.nextInt(3);
+        if (m.cap(id) <= 1) return 1;   // seltene Items (Drachenei ...) nur 1 Stueck pro Order
         long p = Math.max(1, m.prices.sellUnitPrice(id, NONE));
         boolean stack = Math.max(1, it.getDefaultInstance().getMaxStackSize()) > 1;
         long cap = Math.min(stack ? 50_000_000L : 200L, Math.max(stack ? 1000L : 3L, (long) (5e10 / p)));

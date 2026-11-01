@@ -72,6 +72,14 @@ public class DonutMod implements ModInitializer {
     SellService sell = new SellService(prices, orders, eco);
 
     /** Ordner der aktuellen Welt: jede Welt hat ihr eigenes Geld, ihre eigenen Orders, Homes, Spawner usw. */
+    /** Sicher speichern: erst in eine Temp-Datei, dann umbenennen; die alte Version bleibt als .bak erhalten. */
+    static void writeSafe(Path file, String content) throws java.io.IOException {
+        Path tmp = file.resolveSibling(file.getFileName() + ".tmp");
+        Files.writeString(tmp, content);
+        if (Files.exists(file)) Files.copy(file, file.resolveSibling(file.getFileName() + ".bak"), StandardCopyOption.REPLACE_EXISTING);
+        Files.move(tmp, file, StandardCopyOption.REPLACE_EXISTING);
+    }
+
     static Path worldDir() {
         try {
             Path d = INSTANCE.srv.getWorldPath(LevelResource.ROOT).resolve("donutmod");
@@ -103,7 +111,13 @@ public class DonutMod implements ModInitializer {
     static Path saveFile() { return worldDir().resolve("donutmod-balances.json"); }
 
     static final Object[][] KNOWN = {
-            {"kelp",50},{"stick",4},{"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
+            {"kelp",50},{"stick",4},{"deepslate_emerald_ore",6000},{"emerald_ore",5000},{"deepslate_diamond_ore",3500},{"diamond_ore",3000},
+            {"deepslate_gold_ore",350},{"gold_ore",300},{"deepslate_lapis_ore",220},{"lapis_ore",200},{"deepslate_iron_ore",130},{"iron_ore",120},
+            {"deepslate_redstone_ore",110},{"redstone_ore",100},{"deepslate_copper_ore",65},{"copper_ore",60},{"deepslate_coal_ore",45},{"coal_ore",40},
+            {"nether_quartz_ore",150},{"nether_gold_ore",150},{"sculk_catalyst",3000},{"sculk_shrieker",3000},{"heart_of_the_sea",8000},
+            {"nautilus_shell",3000},{"conduit",6000},{"recovery_compass",4000},{"echo_shard",3000},{"sniffer_egg",4000},
+            {"trial_key",5000},{"ominous_trial_key",8000},{"wither_skeleton_skull",5000},{"turtle_scute",200},{"phantom_membrane",300},
+            {"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
             {"string",90},{"spider_eye",70},{"rotten_flesh",20},{"gunpowder",120},{"ender_pearl",400},{"blaze_rod",250},
             {"coal",60},{"charcoal",50},{"iron_ingot",80},{"gold_ingot",120},{"copper_ingot",30},{"diamond",500},
             {"emerald",350},{"lapis_lazuli",60},{"redstone",40},{"quartz",70},{"amethyst_shard",90},
@@ -127,6 +141,8 @@ public class DonutMod implements ModInitializer {
     @Override
     public void onInitialize() {
         INSTANCE = this;
+        // WICHTIG: srv muss gesetzt sein, BEVOR die anderen Klassen beim Start ihre Daten laden (sonst falscher Ordner!)
+        ServerLifecycleEvents.SERVER_STARTING.register(server -> srv = server);
         for (Object[] row : KNOWN) prices.setBase("minecraft:" + row[0], ((Number) row[1]).longValue());
         prices.sellFactor = 6.0 / PriceFile.MULT;   // /sell zahlt 6x, Markt (AH) 48x des Originalpreises
         meta.roll(META_POOL, 2, RND);
@@ -139,6 +155,7 @@ public class DonutMod implements ModInitializer {
         Rtp.register();
         Bases.register();
         Tpa.register();
+        EnderStorage.register();
 
         // Kill-Belohnung: der Moerder bekommt 10 % vom Geld des Opfers
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
@@ -153,7 +170,7 @@ public class DonutMod implements ModInitializer {
         });
         OrderBuilder.register(this);
 
-        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; resetState(); loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); loadMarket(); market = new Market(this); market.init(); seedCustom(); market.ensureCustomOrders(); });
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> { srv = server; resetState(); Tpa.BY_TARGET.clear(); Hoppers.TRACKED.clear(); OrderBuilder.AWAIT.clear(); loadBalances(); loadNames(); initEnchants(); PriceFile.loadInto(prices); Custom.registerPrices(prices); initItems(); loadMarket(); market = new Market(this); market.init(); seedCustom(); market.ensureCustomOrders(); });
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> saveBalances());
         ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
             ServerPlayer jp = handler.getPlayer();
@@ -184,7 +201,7 @@ public class DonutMod implements ModInitializer {
         try {
             Map<String, Long> out = new HashMap<>();
             eco.snapshot().forEach((u, v) -> out.put(u.toString(), v));
-            Files.writeString(saveFile(), GSON.toJson(out));
+            writeSafe(saveFile(), GSON.toJson(out));
         } catch (Exception e) { System.err.println("[DonutMod] Speichern fehlgeschlagen: " + e); }
     }
 
@@ -320,7 +337,7 @@ public class DonutMod implements ModInitializer {
                 for (ItemStack s : e.getValue()) { String enc = encodeStack(s); if (enc != null) l.add(enc); }
                 if (!l.isEmpty()) sm.storage.put(e.getKey().toString(), l);
             }
-            Files.writeString(marketFile(), GSON.toJson(sm));
+            writeSafe(marketFile(), GSON.toJson(sm));
         } catch (Exception e) { System.err.println("[DonutMod] Markt speichern fehlgeschlagen: " + e); }
     }
 
@@ -359,7 +376,7 @@ public class DonutMod implements ModInitializer {
         try {
             Map<String, String> out = new HashMap<>();
             names.forEach((u, n) -> out.put(u.toString(), n));
-            Files.writeString(namesFile(), GSON.toJson(out));
+            writeSafe(namesFile(), GSON.toJson(out));
         } catch (Exception e) { System.err.println("[DonutMod] Namen speichern fehlgeschlagen: " + e); }
     }
 
@@ -483,7 +500,10 @@ public class DonutMod implements ModInitializer {
             double ratio = o.pricePerItem / Math.max(1.0, (double) prices.sellUnitPrice(o.itemId, o.enchants));
             double chance = Math.min(0.8, 0.05 * Math.pow(ratio, 3));
             if (RND.nextDouble() < chance) {
-                int n = (int) Math.max(1, Math.min(2000, Math.ceil(o.remaining * (0.01 + RND.nextDouble() * 0.02))));
+                // billige, leicht zu bekommende Items werden in riesigen Mengen geliefert (bis 500k/min), teure in kleinen
+                long sellP = Math.max(1, prices.sellUnitPrice(o.itemId, o.enchants));
+                long capPerMin = Math.max(100L, Math.min(500_000L, 200_000_000L / sellP));
+                int n = (int) Math.max(1, Math.min(capPerMin, Math.ceil(o.remaining * (0.01 + RND.nextDouble() * 0.02))));
                 int d = orders.botDeliver(o, n);
                 if (d > 0) addPending(o.owner, buildStack(o.itemId, o.enchants, d));
             }

@@ -117,8 +117,8 @@ public final class Bases {
 
     static void save() {
         try {
-            Files.writeString(file(), GSON.toJson(new ArrayList<>(DONE)));
-            Files.writeString(farmFile(), GSON.toJson(new ArrayList<>(FARMS)));
+            DonutMod.writeSafe(file(), GSON.toJson(new ArrayList<>(DONE)));
+            DonutMod.writeSafe(farmFile(), GSON.toJson(new ArrayList<>(FARMS)));
         }
         catch (Exception e) { System.err.println("[DonutMod] Basen speichern fehlgeschlagen: " + e); }
     }

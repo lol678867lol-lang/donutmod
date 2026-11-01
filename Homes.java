@@ -62,6 +62,7 @@ public final class Homes {
         h.x = p.getX(); h.y = p.getY(); h.z = p.getZ(); h.yaw = p.getYRot(); h.pitch = p.getXRot();
         hs.put(key, h);
         Gui.say(p, "§aHome §f" + key + " §agesetzt (" + hs.size() + "/" + MAX + ").");
+        save();
         return 1;
     }
 
@@ -95,7 +96,7 @@ public final class Homes {
                         "§7XYZ: §f" + (int) h.x + " " + (int) h.y + " " + (int) h.z, "",
                         del[0] ? "§cKlick: löschen" : "§aKlick: teleportieren"),
                 (h, pl) -> {
-                    if (del[0]) { of(u).remove(h.name); Gui.say(pl, "§eHome " + h.name + " gelöscht."); }
+                    if (del[0]) { of(u).remove(h.name); save(); Gui.say(pl, "§eHome " + h.name + " gelöscht."); }
                     else { pl.closeContainer(); tp(pl, h); }
                 });
         g.extra(47, () -> del[0]
@@ -111,7 +112,7 @@ public final class Homes {
         try {
             Map<String, Map<String, Home>> out = new HashMap<>();
             DATA.forEach((u, m) -> out.put(u.toString(), m));
-            Files.writeString(file(), GSON.toJson(out));
+            DonutMod.writeSafe(file(), GSON.toJson(out));
         } catch (Exception e) { System.err.println("[DonutMod] Homes speichern fehlgeschlagen: " + e); }
     }
 
@@ -151,6 +152,7 @@ public final class Homes {
                                 ServerPlayer p = c.getSource().getPlayerOrException();
                                 String n = StringArgumentType.getString(c, "name").toLowerCase(Locale.ROOT);
                                 if (of(p.getUUID()).remove(n) == null) { Gui.say(p, "§cKein Home mit diesem Namen."); return 0; }
+                                save();
                                 Gui.say(p, "§eHome " + n + " gelöscht.");
                                 return 1;
                             })));

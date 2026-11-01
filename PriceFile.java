@@ -32,7 +32,7 @@ public class PriceFile {
             Map.entry("minecraft:dragon_egg", 5_000_000L),
             Map.entry("minecraft:netherite_upgrade_smithing_template", 400_000L));
 
-    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v5.json"); }
+    static Path file() { return FabricLoader.getInstance().getConfigDir().resolve("donutmod-prices-v6.json"); }
 
     public static void loadInto(PriceBook prices) {
         try {

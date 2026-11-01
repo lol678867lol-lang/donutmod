@@ -87,6 +87,16 @@ public final class OrderBuilder {
                 Component.literal("Neue Order")));
     }
 
+    /** Name einer schon gewaehlten Verzauberung, die sich mit h ausschliesst (z.B. Silk Touch und Fortune), sonst null. */
+    static String conflict(Draft d, Holder.Reference<Enchantment> h) {
+        for (String sel : d.ench.keySet()) {
+            if (sel.equals(h.getRegisteredName())) continue;
+            for (Holder.Reference<Enchantment> o : d.avail)
+                if (o.getRegisteredName().equals(sel) && !Enchantment.areCompatible(h, o)) return sel;
+        }
+        return null;
+    }
+
     static void render(DonutMod m, Draft d, SimpleContainer box) {
         for (int i = 0; i < 54; i++) box.setItem(i, Gui.pane());
         List<String> el = new ArrayList<>();
@@ -114,6 +124,9 @@ public final class OrderBuilder {
             ItemStack b = Gui.named(Items.ENCHANTED_BOOK, (lvl > 0 ? "§a" : "§7") + pretty(h.getRegisteredName()) + (lvl > 0 ? " " + lvl : ""),
                     "§7Max. Stufe: " + h.value().getMaxLevel(), "§eKlick: Stufe erhöhen");
             if (lvl > 0) b.set(DataComponents.ENCHANTMENT_GLINT_OVERRIDE, true);
+            String cf = lvl == 0 ? conflict(d, h) : null;
+            if (cf != null)
+                b = Gui.named(Items.BARRIER, "§c" + pretty(h.getRegisteredName()) + " (gesperrt)", "§7Passt nicht zu " + pretty(cf));
             box.setItem(27 + i, b);
         }
         if (d.avail.size() > 17) box.setItem(44, Gui.named(Items.ARROW, "§eWeitere Verzauberungen", "§7Seite " + (d.epage + 1) + "/" + ((d.avail.size() + 16) / 17)));
@@ -141,6 +154,10 @@ public final class OrderBuilder {
             if (idx < d.avail.size()) {
                 Holder.Reference<Enchantment> h = d.avail.get(idx);
                 String name = h.getRegisteredName();
+                if (!d.ench.containsKey(name)) {
+                    String cf = conflict(d, h);
+                    if (cf != null) { Gui.say(p, "§c" + pretty(name) + " passt nicht zu " + pretty(cf) + "."); return; }
+                }
                 int next = d.ench.getOrDefault(name, 0) + 1;
                 if (next > Math.max(1, h.value().getMaxLevel())) d.ench.remove(name); else d.ench.put(name, next);
             }
