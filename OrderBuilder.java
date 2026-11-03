@@ -159,7 +159,19 @@ public final class OrderBuilder {
                     if (cf != null) { Gui.say(p, "§c" + pretty(name) + " passt nicht zu " + pretty(cf) + "."); return; }
                 }
                 int next = d.ench.getOrDefault(name, 0) + 1;
-                if (next > Math.max(1, h.value().getMaxLevel())) d.ench.remove(name); else d.ench.put(name, next);
+                if (next > Math.max(1, h.value().getMaxLevel())) d.ench.remove(name);
+                else {
+                    // Verzauberungen, die sich ausschliessen (Silk Touch + Fortune, Protection-Arten ...), werden automatisch entfernt
+                    for (String other : new ArrayList<>(d.ench.keySet())) {
+                        if (other.equals(name)) continue;
+                        for (Holder.Reference<Enchantment> oh : m.enchList)
+                            if (oh.getRegisteredName().equals(other) && !Enchantment.areCompatible(h, oh)) {
+                                d.ench.remove(other);
+                                Gui.say(p, "§7" + pretty(name) + " und " + pretty(other) + " schließen sich aus: " + pretty(other) + " entfernt.");
+                            }
+                    }
+                    d.ench.put(name, next);
+                }
             }
         }
         if (slot == 44 && d.avail.size() > 17) d.epage = (d.epage + 1) % ((d.avail.size() + 16) / 17);

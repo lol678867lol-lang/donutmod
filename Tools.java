@@ -14,7 +14,14 @@ import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.CropBlock;
 import net.minecraft.world.level.block.state.BlockState;
 
+import de.donutmod.core.Stack;
+import net.minecraft.world.Container;
+import net.minecraft.world.level.block.ChestBlock;
+import net.minecraft.world.level.block.entity.BlockEntity;
+import net.minecraft.world.level.block.state.properties.ChestType;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
@@ -24,6 +31,13 @@ public final class Tools {
     private Tools() {}
 
     static void register() {
+        PlayerBlockBreakEvents.BEFORE.register((world, player, pos, state, be) -> {
+            if (world.isClientSide() || !(player instanceof ServerPlayer sp) || !(world instanceof ServerLevel level)) return true;
+            if (!"donutmod_sell_axe".equals(Custom.key(sp.getMainHandItem()))) return true;
+            if (!(state.is(Blocks.CHEST) || state.is(Blocks.TRAPPED_CHEST) || state.is(Blocks.BARREL))) return true;
+            sellChest(level, sp, pos, state);
+            return false;   // die Kiste bleibt stehen
+        });
         PlayerBlockBreakEvents.AFTER.register((world, player, pos, state, be) -> {
             if (!(world instanceof ServerLevel level) || !(player instanceof ServerPlayer sp)) return;
             ItemStack tool = sp.getMainHandItem();
@@ -39,6 +53,29 @@ public final class Tools {
             level.playSound(null, pos, SoundEvents.AMETHYST_BLOCK_CHIME, SoundSource.BLOCKS, 1.0f,
                     0.8f + DonutMod.RND.nextFloat() * 0.8f);
         });
+    }
+
+    /** Sell Axe: Kiste/Doppelkiste/Fass wird nicht abgebaut, sondern der Inhalt verkauft. */
+    static void sellChest(ServerLevel level, ServerPlayer sp, BlockPos pos, BlockState state) {
+        List<Container> parts = new ArrayList<>();
+        BlockEntity be = level.getBlockEntity(pos);
+        if (be instanceof Container c) parts.add(c);
+        if (state.getBlock() instanceof ChestBlock && state.getValue(ChestBlock.TYPE) != ChestType.SINGLE) {
+            BlockEntity ob = level.getBlockEntity(pos.relative(ChestBlock.getConnectedDirection(state)));
+            if (ob instanceof Container oc) parts.add(oc);
+        }
+        List<Stack> list = new ArrayList<>();
+        for (Container c : parts)
+            for (int i = 0; i < c.getContainerSize(); i++) {
+                ItemStack s = c.getItem(i);
+                if (!s.isEmpty()) { DonutMod.addStacks(s, list); c.setItem(i, ItemStack.EMPTY); }
+            }
+        if (list.isEmpty()) { Gui.say(sp, "§7Die Kiste ist leer."); return; }
+        DonutMod m = DonutMod.INSTANCE;
+        long pay = m.sell.sell(sp.getUUID(), list).payout();
+        for (Container c : parts) c.setChanged();
+        DonutMod.ping(sp, SoundEvents.EXPERIENCE_ORB_PICKUP, 1.0f);
+        Gui.say(sp, "§aKisteninhalt verkauft für $" + DonutMod.fmt(pay) + " §7| Kontostand: $" + DonutMod.fmt(m.eco.get(sp.getUUID())));
     }
 
     static boolean breakOne(ServerLevel level, ServerPlayer sp, BlockPos q, TagKey<Block> tag, ItemStack tool) {

@@ -111,15 +111,15 @@ public class DonutMod implements ModInitializer {
     static Path saveFile() { return worldDir().resolve("donutmod-balances.json"); }
 
     static final Object[][] KNOWN = {
-            {"kelp",50},{"stick",4},{"deepslate_emerald_ore",6000},{"emerald_ore",5000},{"deepslate_diamond_ore",3500},{"diamond_ore",3000},
+            {"kelp",12},{"dried_kelp",14},{"coal_block",110},{"blaze_powder",30},{"stick",4},{"deepslate_emerald_ore",6000},{"emerald_ore",5000},{"deepslate_diamond_ore",3500},{"diamond_ore",3000},
             {"deepslate_gold_ore",350},{"gold_ore",300},{"deepslate_lapis_ore",220},{"lapis_ore",200},{"deepslate_iron_ore",130},{"iron_ore",120},
             {"deepslate_redstone_ore",110},{"redstone_ore",100},{"deepslate_copper_ore",65},{"copper_ore",60},{"deepslate_coal_ore",45},{"coal_ore",40},
             {"nether_quartz_ore",150},{"nether_gold_ore",150},{"sculk_catalyst",3000},{"sculk_shrieker",3000},{"heart_of_the_sea",8000},
             {"nautilus_shell",3000},{"conduit",6000},{"recovery_compass",4000},{"echo_shard",3000},{"sniffer_egg",4000},
             {"trial_key",5000},{"ominous_trial_key",8000},{"wither_skeleton_skull",5000},{"turtle_scute",200},{"phantom_membrane",300},
-            {"dried_kelp_block",450},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
-            {"string",90},{"spider_eye",70},{"rotten_flesh",20},{"gunpowder",120},{"ender_pearl",400},{"blaze_rod",250},
-            {"coal",60},{"charcoal",50},{"iron_ingot",80},{"gold_ingot",120},{"copper_ingot",30},{"diamond",500},
+            {"dried_kelp_block",120},{"sea_lantern",300},{"cactus",40},{"bone_meal",30},{"bone",60},
+            {"string",90},{"spider_eye",70},{"rotten_flesh",20},{"gunpowder",120},{"ender_pearl",400},{"blaze_rod",60},
+            {"coal",12},{"charcoal",10},{"iron_ingot",80},{"gold_ingot",120},{"copper_ingot",30},{"diamond",500},
             {"emerald",350},{"lapis_lazuli",60},{"redstone",40},{"quartz",70},{"amethyst_shard",90},
             {"netherite_scrap",1500},{"netherite_ingot",5000},{"ancient_debris",2500},{"iron_block",720},
             {"gold_block",1080},{"diamond_block",4500},{"emerald_block",3150},{"netherite_block",45000},

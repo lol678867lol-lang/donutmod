@@ -48,7 +48,7 @@ import java.util.function.Supplier;
 public final class Bases {
     private Bases() {}
 
-    static final int SPACING = 1750, JITTER = 250;   // Abstand zwischen Nachbarn: 1500 bis 2000 Bloecke
+    static final int SPACING = 550, JITTER = 50;   // Abstand zwischen Nachbarn: 500 bis 600 Bloecke
     static final Set<String> DONE = new HashSet<>();
     static final Gson GSON = new Gson();
 

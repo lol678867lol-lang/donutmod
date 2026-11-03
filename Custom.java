@@ -41,6 +41,7 @@ public final class Custom {
         BASE.put("donutmod:spawner_iron_golem", 9_000_000L);
         BASE.put("donutmod:spawner_zombie", 3_000_000L);
         BASE.put("donutmod:spawner_spider", 4_000_000L);
+        BASE.put("donutmod:sell_axe", 12_000_000L);
         for (String id : BASE.keySet()) TAGGED.add("donutmod_" + id.substring(9));
 
         pot("swiftness", Potions.SWIFTNESS, 50_000L);
@@ -94,6 +95,9 @@ public final class Custom {
     static ItemStack make(String id) {
         if (id == null || !id.startsWith("donutmod:")) return null;
         String k = id.substring(9);
+        if (k.equals("sell_axe"))
+            return tagged(Items.NETHERITE_AXE, "donutmod_sell_axe", "§a§lSell Axe",
+                    "§7Kiste oder Doppelkiste abbauen:", "§7Der Inhalt wird verkauft, die Kiste bleibt stehen");
         if (k.startsWith("shard_")) {
             String kind = k.substring(6);
             Item base; String desc;

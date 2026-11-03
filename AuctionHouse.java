@@ -50,7 +50,7 @@ public class AuctionHouse {
     private double playerChance(Listing l) {
         double market = prices.stackPrice(l.stack);
         double ratio = market / Math.max(1.0, (double) l.price);
-        return Math.max(0.0, Math.min(0.9, 0.13 * ratio * ratio * ratio));
+        return Math.max(0.0, Math.min(0.9, 0.30 * ratio * ratio * ratio));
     }
 
     private boolean removeListing(Listing l) {
