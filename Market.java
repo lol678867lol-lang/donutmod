@@ -1,270 +1,172 @@
-package de.donutmod.fabric;
+package de.donutmod;
 
-import de.donutmod.core.AuctionHouse;
-import de.donutmod.core.Orders;
-import de.donutmod.core.Stack;
-import net.minecraft.core.Holder;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.item.enchantment.Enchantment;
+import de.donutmod.core.*;
+import net.minecraft.component.DataComponentTypes;
+import net.minecraft.component.type.ItemEnchantmentsComponent;
+import net.minecraft.enchantment.Enchantment;
+import net.minecraft.item.Item;
+import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
+import net.minecraft.registry.RegistryKey;
+import net.minecraft.registry.RegistryKeys;
+import net.minecraft.registry.entry.RegistryEntry;
+import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.Identifier;
 
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.Comparator;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Map;
-import java.util.Random;
-import java.util.Set;
+import java.util.*;
 
-/**
- * Bot-Markt: haelt Angebote/Orders auf Mindestmengen (speicherabhaengig skaliert), erzeugt jede Sekunde 10 neue
- * Eintraege und laesst 10 alte verschwinden. Bot-Eintraege sind leichtgewichtig (nur Core-Stack, kein ItemStack).
- */
+/** Globaler Zustand (Singleplayer: Server läuft im selben Prozess wie der Client). */
 public final class Market {
-    final DonutMod m;
-    long minAh, minOrders;
-    /** Obergrenze, damit der Markt durch +3 pro Sekunde nicht unbegrenzt waechst (Speicher). */
-    double capFactor = 1.0;
-    long maxAh, maxOrders;
-    boolean reduced;
-    final Map<String, Integer> ahCount = new HashMap<>();
-    final Map<String, Integer> orderCount = new HashMap<>();
-    /** Beliebtheit je Item: steigt bei Kaeufen, sinkt mit der Zeit. Unbeliebte Items haben nur 1 Angebot. */
-    final Map<String, Double> pop = new HashMap<>();
-    final Map<Item, List<Holder.Reference<Enchantment>>> compat = new HashMap<>();
-    static final Map<String, Integer> NONE = Map.of();
-    static final Random RND = DonutMod.RND;
+    public static boolean ready = false;
+    public static MinecraftServer server;
+    public static final Random rnd = new Random();
 
-    Market(DonutMod m) { this.m = m; }
+    public static PriceBook prices;
+    public static MetaManager meta;
+    public static Economy eco;
+    public static Orders orders;
+    public static AuctionHouse ah;
+    public static SellService sell;
+    public static RecipeGraph recipes;
 
-    void init() {
-        long max = Runtime.getRuntime().maxMemory();
-        // Das Spiel selbst braucht ca. 1,6 GB; vom Rest darf der Markt die Haelfte nutzen
-        double budget = Math.max(0.0, (max - 1.6 * 1024 * 1024 * 1024) * 0.5);
-        double need = DonutMod.REQ_AH * 110.0 + DonutMod.REQ_ORDERS * 100.0;
-        double scale = Math.min(1.0, budget / need);
-        capFactor = Math.max(1.0, Math.min(1.5, budget / need));
-        minAh = Math.max(10_000L, (long) (DonutMod.REQ_AH * scale));
-        minOrders = Math.max(5_000L, (long) (DonutMod.REQ_ORDERS * scale));
-        if (Perf.LITE) { minAh = Math.max(10_000L, minAh * 3 / 10); minOrders = Math.max(5_000L, minOrders * 3 / 10); }
-        maxAh = (long) (minAh * capFactor);
-        maxOrders = (long) (minOrders * capFactor);
-        reduced = scale < 0.999 || Perf.LITE;
-        System.out.println("[DonutMod] Markt-Ziel: " + minAh + " Angebote, " + minOrders + " Orders (RAM-Faktor " + String.format("%.2f", scale) + ")");
-        for (Item it : m.pool) pop.put(m.idOf(it), 1.0);
-        for (AuctionHouse.Listing l : m.ah.all()) if (l.stack.enchants().isEmpty()) ahCount.merge(l.stack.id(), 1, Integer::sum);
-        for (Orders.Order o : m.orders.all()) if (o.enchants.isEmpty()) orderCount.merge(o.itemId, 1, Integer::sum);
+    /** Bot-Katalog: id, max. Menge, Verzauberungen. */
+    record Entry(String id, int maxCount, Map<String, Integer> ench) {}
+    static final List<Entry> CATALOG = List.of(
+        new Entry("minecraft:kelp", 64, Map.of()),
+        new Entry("minecraft:sugar_cane", 64, Map.of()),
+        new Entry("minecraft:cactus", 64, Map.of()),
+        new Entry("minecraft:bone", 64, Map.of()),
+        new Entry("minecraft:obsidian", 64, Map.of()),
+        new Entry("minecraft:ender_pearl", 16, Map.of()),
+        new Entry("minecraft:golden_apple", 16, Map.of()),
+        new Entry("minecraft:diamond", 64, Map.of()),
+        new Entry("minecraft:netherite_ingot", 16, Map.of()),
+        new Entry("minecraft:netherite_chestplate", 1,
+            Map.of("minecraft:protection", 4, "minecraft:unbreaking", 3, "minecraft:mending", 1)),
+        new Entry("minecraft:netherite_sword", 1,
+            Map.of("minecraft:sharpness", 5, "minecraft:unbreaking", 3, "minecraft:mending", 1)),
+        new Entry("minecraft:elytra", 1, Map.of("minecraft:mending", 1))
+    );
+
+    public static void init(MinecraftServer s) {
+        server = s;
+        prices = new PriceBook();
+        prices.setBase("minecraft:kelp", 40);
+        prices.setBase("minecraft:sugar_cane", 30);
+        prices.setBase("minecraft:cactus", 25);
+        prices.setBase("minecraft:bone", 20);
+        prices.setBase("minecraft:obsidian", 250);
+        prices.setBase("minecraft:ender_pearl", 400);
+        prices.setBase("minecraft:golden_apple", 1_500);
+        prices.setBase("minecraft:diamond", 5_000);
+        prices.setBase("minecraft:netherite_ingot", 50_000);
+        prices.setBase("minecraft:elytra", 500_000);
+        prices.setEnchantValue("minecraft:protection", 100_000);
+        prices.setEnchantValue("minecraft:sharpness", 80_000);
+        prices.setEnchantValue("minecraft:unbreaking", 30_000);
+        prices.setEnchantValue("minecraft:mending", 200_000);
+        // Alle anderen Items: Preis nach Seltenheit, damit wirklich alles verkaufbar ist
+        java.util.function.ToLongFunction<String> raw = id -> {
+            try {
+                Item it = Registries.ITEM.get(Identifier.of(id));
+                return switch (new ItemStack(it).getRarity()) {
+                    case COMMON -> 100L;
+                    case UNCOMMON -> 1_000L;
+                    case RARE -> 25_000L;
+                    case EPIC -> 250_000L;
+                };
+            } catch (Exception e) { return 100L; }
+        };
+        // Alles mit Rezept wird aus den Grundmaterialien berechnet (+10 %), Rest = Rohstoff nach Seltenheit
+        recipes = new RecipeGraph(prices, raw);
+        RecipeLoader.load(s, recipes);
+        prices.fallback = recipes::price;
+        meta = new MetaManager();
+        eco = new Economy();
+        orders = new Orders(prices, meta, eco);
+        ah = new AuctionHouse(prices, meta, eco);
+        sell = new SellService(prices, orders, eco);
+        rollMetas();
+        for (int i = 0; i < 12; i++) botList();
+        for (int i = 0; i < 6; i++) botOrder();
+        ready = true;
     }
 
-    // ---------- Beliebtheit ----------
-    void onBought(String id, double w) { pop.merge(id, w, (a, b) -> Math.min(5.0, a + b)); }
+    public static void shutdown() { ready = false; }
 
-    /** Jede Minute: Beliebtheit sinkt langsam Richtung 0,3. */
-    void popDecay() { pop.replaceAll((k, v) -> 0.3 + (v - 0.3) * 0.98); }
-
-    /** Wie viele Angebote ein Item gleichzeitig haben darf: beliebte viele, unbeliebte nur 1. */
-    int capFor(String id) {
-        double s = pop.getOrDefault(id, 1.0);
-        int rarity = m.cap(id);
-        if (s < 0.6) return 1;
-        long price = Math.max(1, m.prices.unitPrice(id, NONE));
-        long c = (long) Math.max(2, Math.min(200_000.0, 3e7 / price * Math.min(s, 5.0)));
-        return (int) Math.min(rarity, c);
+    public static void rollMetas() {
+        meta.roll(CATALOG.stream().map(Entry::id).toList(), 3, rnd);
     }
 
-    // ---------- Zaehler ----------
-    void ahRemoved(AuctionHouse.Listing l) {
-        if (l.stack.enchants().isEmpty()) ahCount.merge(l.stack.id(), -1, (a, b) -> Math.max(0, a + b));
+    public static void botList() {
+        Entry e = CATALOG.get(rnd.nextInt(CATALOG.size()));
+        ah.botList(new Stack(e.id(), 1 + rnd.nextInt(e.maxCount()), e.ench()), rnd);
     }
 
-    void ordersRemoved(Orders.Order o) {
-        if (o.enchants.isEmpty()) orderCount.merge(o.itemId, -1, (a, b) -> Math.max(0, a + b));
+    public static void botOrder() {
+        Entry e = CATALOG.get(rnd.nextInt(CATALOG.size()));
+        orders.botOrder(e.id(), e.ench(), 1 + rnd.nextInt(e.maxCount()), rnd);
     }
 
-    // ---------- Erzeugen ----------
-    Map<String, Integer> randomEnchants(Item it) {
-        List<Holder.Reference<Enchantment>> ok = compat.computeIfAbsent(it, k -> {
-            List<Holder.Reference<Enchantment>> r = new ArrayList<>();
-            ItemStack st = new ItemStack(k);
-            boolean book = k == Items.ENCHANTED_BOOK;
-            if (book || st.isEnchantable())
-                for (Holder.Reference<Enchantment> h : m.enchList)
-                    if (!h.getRegisteredName().contains("curse") && (book || h.value().isSupportedItem(st))) r.add(h);
-            return r;
-        });
-        if (ok.isEmpty()) return null;
-        boolean book = it == Items.ENCHANTED_BOOK;
-        List<Holder.Reference<Enchantment>> chosen = new ArrayList<>();
-        if (!book)
-            for (String pref : new String[]{"minecraft:mending", "minecraft:unbreaking"})
-                if (RND.nextInt(10) < 8)
-                    for (Holder.Reference<Enchantment> h : ok) if (h.getRegisteredName().equals(pref)) { tryAdd(chosen, h); break; }
-        List<Holder.Reference<Enchantment>> shuffled = new ArrayList<>(ok);
-        Collections.shuffle(shuffled, RND);
-        int target = book ? 1 + (RND.nextInt(4) == 0 ? 1 : 0) : 3 + RND.nextInt(3);
-        for (Holder.Reference<Enchantment> h : shuffled) {
-            if (chosen.size() >= target) break;
-            tryAdd(chosen, h);
-        }
-        Map<String, Integer> out = new HashMap<>();
-        for (Holder.Reference<Enchantment> h : chosen) {
-            int max = Math.max(1, h.value().getMaxLevel());
-            out.put(h.getRegisteredName(), RND.nextInt(4) != 0 ? max : 1 + RND.nextInt(max));
-        }
-        return out;
-    }
-
-    /** Fuegt eine Verzauberung nur hinzu, wenn sie mit allen bisherigen vertraeglich ist (kein Protection + Fire Protection). */
-    static void tryAdd(List<Holder.Reference<Enchantment>> chosen, Holder.Reference<Enchantment> h) {
-        for (Holder.Reference<Enchantment> c : chosen)
-            if (c == h || !Enchantment.areCompatible(h, c)) return;
-        chosen.add(h);
-    }
-
-    /** Bot-Orders: guenstige Items werden in riesigen Mengen geordert (z.B. 10 Mio. Kelp). */
-    int botAmount(Item it, String id, boolean plain) {
-        if (!plain) return 1 + RND.nextInt(3);
-        if (m.cap(id) <= 1) return 1;   // seltene Items (Drachenei ...) nur 1 Stueck pro Order
-        long p = Math.max(1, m.prices.sellUnitPrice(id, NONE));
-        boolean stack = Math.max(1, it.getDefaultInstance().getMaxStackSize()) > 1;
-        long cap = Math.min(stack ? 50_000_000L : 200L, Math.max(stack ? 1000L : 3L, (long) (5e10 / p)));
-        double lo = Math.log(stack ? 256 : 1), hi = Math.log(Math.max(cap, 2));
-        long amt = (long) Math.exp(lo + RND.nextDouble() * (hi - lo));
-        return (int) Math.max(1, Math.min(cap, amt));
-    }
-
-    /** Zufaellige, aber runde Stackgroessen: 1, 16, 32 oder 64 (nie mehr als der Stack des Items erlaubt). */
-    static int stackSize(int max) {
-        int v = RND.nextInt(100);
-        int size = v < 15 ? 1 : v < 35 ? 16 : v < 60 ? 32 : 64;
-        return Math.min(size, max);
-    }
-
-    void addAh(int n) {
-        List<Item> pool = m.pool;
-        if (pool.isEmpty()) return;
-        int made = 0, tries = 0;
-        while (made < n && tries++ < n * 30) {
-            if (RND.nextInt(100) < 4) {   // ca. 4 % Traenke
-                m.ah.botList(new Stack(Custom.POTION_IDS.get(RND.nextInt(Custom.POTION_IDS.size())), 1, NONE), RND);
-                made++;
-                continue;
-            }
-            Item it = pool.get(RND.nextInt(pool.size()));
-            String id = m.idOf(it);
-            boolean book = it == Items.ENCHANTED_BOOK;
-            Map<String, Integer> ench = NONE;
-            if (book || RND.nextInt(4) == 0) {
-                Map<String, Integer> e = randomEnchants(it);
-                if (e != null) ench = e; else if (book) continue;
-            }
-            boolean plain = ench.isEmpty();
-            if (plain && ahCount.getOrDefault(id, 0) >= capFor(id)) continue;
-            int max = Math.max(1, it.getDefaultInstance().getMaxStackSize());
-            int count = plain && max > 1 ? stackSize(max) : 1;
-            m.ah.botList(new Stack(id, count, ench), RND);
-            if (plain) ahCount.merge(id, 1, Integer::sum);
-            made++;
+    /** Wird jede Spielminute (1200 Ticks) aufgerufen. */
+    public static void minuteTick() {
+        ah.tickBotBuyers(rnd);
+        long botListings = ah.all().stream().filter(l -> l.seller == null).count();
+        if (botListings < 15) botList();
+        long botOrders = orders.all().stream().filter(o -> o.owner == null).count();
+        if (botOrders < 8) botOrder();
+        // Spieler-Orders werden von Bots geliefert (zufällig, nur wenn Spieler online)
+        for (Orders.Order o : new ArrayList<>(orders.all())) {
+            if (o.owner == null || rnd.nextDouble() > 0.3) continue;
+            ServerPlayerEntity p = server.getPlayerManager().getPlayer(o.owner);
+            if (p == null) continue;
+            orders.remove(o);
+            give(p, new Stack(o.itemId, o.remaining, o.enchants));
+            p.sendMessage(net.minecraft.text.Text.literal("Deine Order wurde geliefert: " + o.remaining + "x " + o.itemId), false);
         }
     }
 
-    void addOrders(int n) {
-        List<Item> pool = m.pool;
-        if (pool.isEmpty()) return;
-        int made = 0, tries = 0;
-        while (made < n && tries++ < n * 30) {
-            if (RND.nextInt(100) < 4) {
-                m.orders.botOrder(Custom.POTION_IDS.get(RND.nextInt(Custom.POTION_IDS.size())), NONE, 8 + RND.nextInt(193), RND);
-                made++;
-                continue;
-            }
-            Item it = pool.get(RND.nextInt(pool.size()));
-            String id = m.idOf(it);
-            boolean book = it == Items.ENCHANTED_BOOK;
-            Map<String, Integer> ench = NONE;
-            if (book || RND.nextInt(4) == 0) {
-                Map<String, Integer> e = randomEnchants(it);
-                if (e != null) ench = e; else if (book) continue;
-            }
-            boolean plain = ench.isEmpty();
-            if (plain && orderCount.getOrDefault(id, 0) >= m.cap(id)) continue;
-            int amt = botAmount(it, id, plain);
-            m.orders.botOrder(id, ench, amt, RND);
-            if (plain) orderCount.merge(id, 1, Integer::sum);
-            made++;
+    // ---------- Umwandlung Minecraft <-> Core (Haltbarkeit wird bewusst ignoriert) ----------
+
+    public static Stack toCore(ItemStack s) {
+        Map<String, Integer> ench = new HashMap<>();
+        collect(s.getOrDefault(DataComponentTypes.ENCHANTMENTS, ItemEnchantmentsComponent.DEFAULT), ench);
+        collect(s.getOrDefault(DataComponentTypes.STORED_ENCHANTMENTS, ItemEnchantmentsComponent.DEFAULT), ench);
+        return new Stack(Registries.ITEM.getId(s.getItem()).toString(), s.getCount(), ench);
+    }
+
+    private static void collect(ItemEnchantmentsComponent c, Map<String, Integer> out) {
+        for (var e : c.getEnchantmentEntries())
+            e.getKey().getKey().ifPresent(k -> out.put(k.getValue().toString(), e.getIntValue()));
+    }
+
+    public static ItemStack toMc(Stack s) {
+        Item item = Registries.ITEM.get(Identifier.of(s.id()));
+        ItemStack st = new ItemStack(item, Math.max(1, Math.min(s.count(), item.getMaxCount())));
+        var reg = server.getRegistryManager().getOrThrow(RegistryKeys.ENCHANTMENT);
+        for (var e : s.enchants().entrySet()) {
+            reg.getOptional(RegistryKey.of(RegistryKeys.ENCHANTMENT, Identifier.of(e.getKey())))
+               .ifPresent(entry -> st.addEnchantment(entry, e.getValue()));
+        }
+        return st;
+    }
+
+    /** Gibt dem Spieler das Item (in Stacks gesplittet). */
+    public static void give(ServerPlayerEntity p, Stack s) {
+        int left = s.count();
+        int max = Registries.ITEM.get(Identifier.of(s.id())).getMaxCount();
+        while (left > 0) {
+            int n = Math.min(left, max);
+            p.getInventory().offerOrDrop(toMc(new Stack(s.id(), n, s.enchants())));
+            left -= n;
         }
     }
 
-    /** Je Shard-Werkzeug/Spawner immer eine Bot-Order. */
-    void ensureCustomOrders() {
-        Set<String> have = new HashSet<>();
-        for (Orders.Order o : m.orders.all()) if (o.owner == null && o.itemId.startsWith("donutmod:")) have.add(o.itemId);
-        for (String cid : Custom.BASE.keySet())
-            if (!have.contains(cid)) m.orders.botOrder(cid, NONE, 1 + RND.nextInt(2), RND);
-    }
-
-    // ---------- Takt ----------
-    void tick(int t) {
-        if (m.pool.isEmpty()) return;
-        // Aufbau nur mit begrenzter Rechenzeit pro Tick (auf schwachen PCs weniger), damit nichts ruckelt
-        long end = System.nanoTime() + Perf.BUDGET_NS;
-        while (System.nanoTime() < end) {
-            boolean did = false;
-            if (m.ah.size() < minAh) { addAh(100); did = true; }
-            if (m.orders.size() < minOrders) { addOrders(100); did = true; }
-            if (!did) break;
-        }
-        if (t % 20 == 0) churn();
-    }
-
-    /** Jede Sekunde: 7 alte Eintraege weg (von Bots gekauft/erfuellt), 10 neue dazu (bis zur Obergrenze). */
-    void churn() {
-        for (AuctionHouse.Listing l : m.ah.removeRandomBots(7, RND)) { ahRemoved(l); m.ahItems.remove(l.id); onBought(l.stack.id(), 0.02); }
-        for (Orders.Order o : m.orders.removeRandomBots(7, RND)) ordersRemoved(o);
-        if (m.ah.size() < maxAh) addAh(10);
-        if (m.orders.size() < maxOrders) addOrders(10);
-    }
-
-    // ---------- Sortier-Caches fuer die Menues ----------
-    final Map<Integer, List<AuctionHouse.Listing>> ahCache = new HashMap<>();
-    final Map<Integer, Long> ahCacheTime = new HashMap<>();
-    List<Orders.Order> ordersCache;
-    long ordersCacheTime = 0;
-
-    /** Kopie der Angebote in der gewuenschten Reihenfolge (0 neueste, 1 guenstigste, 2 teuerste, 3 Name). */
-    List<AuctionHouse.Listing> ahSorted(int mode) {
-        if (mode == 0) {
-            List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
-            Collections.reverse(l);
-            return l;
-        }
-        long now = System.currentTimeMillis();
-        Long t = ahCacheTime.get(mode);
-        if (t == null || now - t > 300_000) {
-            List<AuctionHouse.Listing> l = new ArrayList<>(m.ah.all());
-            switch (mode) {
-                case 1 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price));
-                case 2 -> l.sort(Comparator.comparingLong((AuctionHouse.Listing x) -> x.price).reversed());
-                default -> l.sort(Comparator.comparing((AuctionHouse.Listing x) -> x.stack.id()));
-            }
-            ahCache.put(mode, l);
-            ahCacheTime.put(mode, now);
-        }
-        return new ArrayList<>(ahCache.get(mode));
-    }
-
-    /** Orders nach Preis, hoechster zuerst (60 s gecacht). */
-    List<Orders.Order> ordersSorted() {
-        long now = System.currentTimeMillis();
-        if (ordersCache == null || now - ordersCacheTime > 300_000) {
-            List<Orders.Order> l = new ArrayList<>(m.orders.all());
-            l.sort(Comparator.comparingLong((Orders.Order o) -> o.pricePerItem).reversed());
-            ordersCache = l;
-            ordersCacheTime = now;
-        }
-        return new ArrayList<>(ordersCache);
+    public static String fmt(long v) {
+        if (v >= 1_000_000_000L) return String.format(Locale.GERMANY, "%.2f Mrd", v / 1e9);
+        if (v >= 1_000_000L) return String.format(Locale.GERMANY, "%.2f M", v / 1e6);
+        if (v >= 1_000L) return String.format(Locale.GERMANY, "%.1f K", v / 1e3);
+        return Long.toString(v);
     }
 }

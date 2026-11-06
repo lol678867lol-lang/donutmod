@@ -11,6 +11,4 @@ public class Economy {
         add(p, -amount);
         return true;
     }
-    public Map<UUID, Long> snapshot() { return new HashMap<>(balances); }
-    public void load(Map<UUID, Long> data) { balances.clear(); balances.putAll(data); }
 }

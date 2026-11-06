@@ -1,43 +1,21 @@
 plugins {
     id 'fabric-loom' version '1.14-SNAPSHOT'
 }
+
 version = project.mod_version
 group = 'de.donutmod'
-base { archivesName = 'donutmod' }
-
-loom {
-    accessWidenerPath = file('donutmod.accesswidener')
-}
-
-sourceSets {
-    main {
-        java {
-            srcDir '.'
-            include '**/*.java'
-            exclude 'build/**', '.gradle/**'
-        }
-        resources {
-            srcDir '.'
-            include 'fabric.mod.json'
-            include 'donutmod.accesswidener'
-        }
-    }
-}
 
 dependencies {
     minecraft "com.mojang:minecraft:${project.minecraft_version}"
-    mappings loom.officialMojangMappings()
+    mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
     modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
     modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 }
 
-java {
-    sourceCompatibility = JavaVersion.VERSION_21
-    targetCompatibility = JavaVersion.VERSION_21
-    withSourcesJar()
-}
-tasks.withType(JavaCompile).configureEach { options.release = 21 }
 processResources {
-    inputs.property 'version', project.version
-    filesMatching('fabric.mod.json') { expand 'version': project.version }
+    inputs.property "version", project.version
+    filesMatching("fabric.mod.json") { expand "version": project.version }
 }
+
+tasks.withType(JavaCompile).configureEach { options.release = 21 }
+java { withSourcesJar() }

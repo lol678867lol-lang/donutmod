@@ -7,46 +7,26 @@ import java.util.Map;
 public class PriceBook {
     private final Map<String, Long> base = new HashMap<>();
     private final Map<String, Long> enchantValue = new HashMap<>();
-    private final Map<String, Double> factor = new HashMap<>();
     public long defaultBase = 100;
+    /** Preis für Items ohne eigenen Eintrag (z.B. nach Seltenheit). */
+    public java.util.function.ToLongFunction<String> fallback = id -> defaultBase;
     public long defaultEnchantPerLevel = 5_000;
     /** Globaler Preisfaktor für alle Items (1.25 = 25 % teurer). */
     public double priceMultiplier = 1.25;
 
-    /** Anteil des Marktpreises, den /sell (und Bot-Orders) zahlen. Markt (Auktionshaus) = voller Preis. */
-    public double sellFactor = 1.0;
-
-    /** Nachfrage: positiv = wird viel gekauft (teurer), negativ = wird viel verkauft (guenstiger). */
-    public void bump(String id, double d) {
-        double f = factor.getOrDefault(id, 1.0) + d;
-        factor.put(id, Math.max(0.6, Math.min(2.5, f)));
-    }
-
-    /** Preise pendeln sich langsam wieder bei 1.0 ein (jede Minute aufrufen). */
-    public void decay() {
-        factor.replaceAll((k, v) -> v + (1.0 - v) * 0.06);
-        factor.values().removeIf(v -> Math.abs(v - 1.0) < 0.005);
-    }
-
-    public double factorOf(String id) { return factor.getOrDefault(id, 1.0); }
-
+    /** Nur explizit gesetzter Preis (ohne Fallback), sonst null. */
+    public Long explicit(String id) { return base.get(id); }
     public void setBase(String id, long price) { base.put(id, price); }
     public void setEnchantValue(String enchantId, long perLevel) { enchantValue.put(enchantId, perLevel); }
 
     /** Preis für EIN Item inkl. Verzauberungen. */
     public long unitPrice(String id, Map<String, Integer> enchants) {
-        long p = base.getOrDefault(id, defaultBase);
+        Long b = base.get(id);
+        long p = b != null ? b : fallback.applyAsLong(id);
         for (var e : enchants.entrySet())
             p += enchantValue.getOrDefault(e.getKey(), defaultEnchantPerLevel) * e.getValue();
-        return Math.round(p * priceMultiplier * factor.getOrDefault(id, 1.0));
+        return Math.round(p * priceMultiplier);
     }
-
-    /** Preis, den /sell pro Item zahlt (Marktpreis * sellFactor). */
-    public long sellUnitPrice(String id, Map<String, Integer> enchants) {
-        return Math.max(1, Math.round(unitPrice(id, enchants) * sellFactor));
-    }
-    public long sellUnitPrice(Stack s) { return sellUnitPrice(s.id(), s.enchants()); }
-    public long sellStackPrice(Stack s) { return sellUnitPrice(s) * s.count(); }
 
     public long unitPrice(Stack s) { return unitPrice(s.id(), s.enchants()); }
     public long stackPrice(Stack s) { return unitPrice(s) * s.count(); }
