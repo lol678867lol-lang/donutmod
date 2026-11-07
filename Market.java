@@ -49,6 +49,63 @@ public final class Market {
         new Entry("minecraft:elytra", 1, Map.of("minecraft:mending", 1))
     );
 
+    /** Alle handelbaren Items inkl. Items anderer Mods (Bots verkaufen/bestellen daraus). */
+    static final List<Entry> ALL_ITEMS = new ArrayList<>();
+    static final Set<String> BLOCKED = Set.of("air", "barrier", "bedrock", "command_block", "chain_command_block",
+        "repeating_command_block", "structure_block", "structure_void", "jigsaw", "debug_stick", "light",
+        "knowledge_book", "spawner", "reinforced_deepslate", "end_portal_frame", "command_block_minecart",
+        "test_block", "test_instance_block");
+    public static int modCount = 0;
+    /** /mod on|off: aus = Items anderer Mods werden nicht verkauft und sind nicht in /ah und Orders. */
+    public static boolean modItems = true;
+    public static boolean isMod(String id) { return !id.startsWith("minecraft:"); }
+    public static boolean allowed(String id) { return modItems || !isMod(id); }
+
+    public static void setModItems(boolean on) {
+        modItems = on;
+        if (!on) {
+            ah.removeIf(l -> l.seller == null && isMod(l.stack.id()));
+            orders.removeIf(o -> o.owner == null && isMod(o.itemId));
+        }
+        rollMetas();
+    }
+    public static int ALL_ITEMS_SIZE() { return ALL_ITEMS.size(); }
+
+    private static void scanItems() {
+        ALL_ITEMS.clear();
+        modCount = (int) net.fabricmc.loader.api.FabricLoader.getInstance().getAllMods().stream()
+            .map(m -> m.getMetadata().getId())
+            .filter(id -> !id.equals("minecraft") && !id.equals("java") && !id.equals("fabricloader")
+                       && !id.startsWith("fabric") && !id.equals("donutmod")).count();
+        for (Item it : Registries.ITEM) {
+            Identifier id = Registries.ITEM.getId(it);
+            if (BLOCKED.contains(id.getPath()) || id.getPath().endsWith("_spawn_egg")) continue;
+            ALL_ITEMS.add(new Entry(id.toString(), Math.min(64, Math.max(1, it.getMaxCount())), Map.of()));
+        }
+    }
+
+    /** Rohstoff-Preis: Seltenheit * Schlüsselwort-Heuristik (Erze/Edelsteine sind seltener als Holz/Erde). */
+    static long rawPrice(String id) {
+        try {
+            Item it = Registries.ITEM.get(Identifier.of(id));
+            long base = switch (new ItemStack(it).getRarity()) {
+                case COMMON -> 100L; case UNCOMMON -> 1_000L; case RARE -> 25_000L; case EPIC -> 250_000L;
+            };
+            String n = Identifier.of(id).getPath();
+            double f = 1.0;
+            if (n.contains("diamond") || n.contains("emerald") || n.contains("netherite") || n.contains("ancient")) f = 40;
+            else if (n.contains("ruby") || n.contains("sapphire") || n.contains("gem") || n.contains("crystal")
+                  || n.contains("platinum") || n.contains("uranium") || n.contains("titanium")) f = 25;
+            else if (n.contains("ingot") || n.contains("raw_") || n.endsWith("_ore") || n.contains("gold")
+                  || n.contains("silver") || n.contains("copper") || n.contains("tin") || n.contains("lead")
+                  || n.contains("bronze") || n.contains("steel")) f = 8;
+            else if (n.contains("dust") || n.contains("nugget") || n.contains("shard")) f = 3;
+            // Mod-Items ohne Rezept sind meist seltener als Vanilla-Basics
+            if (!Identifier.of(id).getNamespace().equals("minecraft")) f *= 1.5;
+            return Math.max(1, Math.round(base * f / (n.contains("nugget") ? 9 : 1)));
+        } catch (Exception e) { return 100L; }
+    }
+
     public static void init(MinecraftServer s) {
         server = s;
         prices = new PriceBook();
@@ -67,17 +124,7 @@ public final class Market {
         prices.setEnchantValue("minecraft:unbreaking", 30_000);
         prices.setEnchantValue("minecraft:mending", 200_000);
         // Alle anderen Items: Preis nach Seltenheit, damit wirklich alles verkaufbar ist
-        java.util.function.ToLongFunction<String> raw = id -> {
-            try {
-                Item it = Registries.ITEM.get(Identifier.of(id));
-                return switch (new ItemStack(it).getRarity()) {
-                    case COMMON -> 100L;
-                    case UNCOMMON -> 1_000L;
-                    case RARE -> 25_000L;
-                    case EPIC -> 250_000L;
-                };
-            } catch (Exception e) { return 100L; }
-        };
+        java.util.function.ToLongFunction<String> raw = Market::rawPrice;
         // Alles mit Rezept wird aus den Grundmaterialien berechnet (+10 %), Rest = Rohstoff nach Seltenheit
         recipes = new RecipeGraph(prices, raw);
         RecipeLoader.load(s, recipes);
@@ -87,6 +134,7 @@ public final class Market {
         orders = new Orders(prices, meta, eco);
         ah = new AuctionHouse(prices, meta, eco);
         sell = new SellService(prices, orders, eco);
+        scanItems();
         rollMetas();
         for (int i = 0; i < 12; i++) botList();
         for (int i = 0; i < 6; i++) botOrder();
@@ -96,16 +144,28 @@ public final class Market {
     public static void shutdown() { ready = false; }
 
     public static void rollMetas() {
-        meta.roll(CATALOG.stream().map(Entry::id).toList(), 3, rnd);
+        List<String> pool = new ArrayList<>(CATALOG.stream().map(Entry::id).toList());
+        for (int i = 0; i < 5 && !ALL_ITEMS.isEmpty(); i++) pool.add(ALL_ITEMS.get(rnd.nextInt(ALL_ITEMS.size())).id());
+        pool.removeIf(id -> !allowed(id));
+        meta.roll(pool, 4, rnd);
+    }
+
+    private static Entry pick() {
+        for (int i = 0; i < 30; i++) {
+            Entry e = (!ALL_ITEMS.isEmpty() && rnd.nextBoolean())
+                ? ALL_ITEMS.get(rnd.nextInt(ALL_ITEMS.size())) : CATALOG.get(rnd.nextInt(CATALOG.size()));
+            if (allowed(e.id())) return e;
+        }
+        return CATALOG.get(rnd.nextInt(CATALOG.size()));
     }
 
     public static void botList() {
-        Entry e = CATALOG.get(rnd.nextInt(CATALOG.size()));
+        Entry e = pick();
         ah.botList(new Stack(e.id(), 1 + rnd.nextInt(e.maxCount()), e.ench()), rnd);
     }
 
     public static void botOrder() {
-        Entry e = CATALOG.get(rnd.nextInt(CATALOG.size()));
+        Entry e = pick();
         orders.botOrder(e.id(), e.ench(), 1 + rnd.nextInt(e.maxCount()), rnd);
     }
 
@@ -163,10 +223,5 @@ public final class Market {
         }
     }
 
-    public static String fmt(long v) {
-        if (v >= 1_000_000_000L) return String.format(Locale.GERMANY, "%.2f Mrd", v / 1e9);
-        if (v >= 1_000_000L) return String.format(Locale.GERMANY, "%.2f M", v / 1e6);
-        if (v >= 1_000L) return String.format(Locale.GERMANY, "%.1f K", v / 1e3);
-        return Long.toString(v);
-    }
+    public static String fmt(long v) { return de.donutmod.core.Money.format(v, Settings.shortNumbers); }
 }

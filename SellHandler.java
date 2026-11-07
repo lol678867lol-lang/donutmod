@@ -8,6 +8,7 @@ import net.minecraft.entity.player.PlayerInventory;
 import net.minecraft.inventory.SimpleInventory;
 import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
+import net.minecraft.registry.Registries;
 import net.minecraft.screen.GenericContainerScreenHandler;
 import net.minecraft.screen.ScreenHandlerType;
 import net.minecraft.screen.SimpleNamedScreenHandlerFactory;
@@ -42,11 +43,15 @@ public class SellHandler extends GenericContainerScreenHandler {
         updateButton();
     }
 
+    private static boolean blocked(ItemStack s) {
+        return !Market.allowed(Registries.ITEM.getId(s.getItem()).toString());
+    }
+
     private List<Stack> contents() {
         List<Stack> list = new ArrayList<>();
         for (int i = 0; i < ITEM_SLOTS; i++) {
             ItemStack s = inv.getStack(i);
-            if (!s.isEmpty()) list.add(Market.toCore(s));
+            if (!s.isEmpty() && !blocked(s)) list.add(Market.toCore(s));
         }
         return list;
     }
@@ -60,11 +65,15 @@ public class SellHandler extends GenericContainerScreenHandler {
 
     private void sellAll() {
         List<Stack> list = contents();
-        if (list.isEmpty()) return;
-        long pay = Market.sell.sell(sp.getUuid(), list).payout();
-        for (int i = 0; i < ITEM_SLOTS; i++) inv.setStack(i, ItemStack.EMPTY);
-        sp.sendMessage(Text.literal("Verkauft für " + Market.fmt(pay)
-            + " | Kontostand: " + Market.fmt(Market.eco.get(sp.getUuid()))), false);
+        long pay = list.isEmpty() ? 0 : Market.sell.sell(sp.getUuid(), list).payout();
+        boolean returned = false;
+        for (int i = 0; i < ITEM_SLOTS; i++) {
+            ItemStack s = inv.getStack(i);
+            if (!s.isEmpty() && blocked(s)) { sp.getInventory().offerOrDrop(s.copy()); returned = true; }
+            inv.setStack(i, ItemStack.EMPTY);
+        }
+        if (!list.isEmpty()) sp.sendMessage(Text.literal("Verkauft für " + Market.fmt(pay)), false);
+        if (returned) sp.sendMessage(Text.literal("Items anderer Mods sind ausgeschaltet (/mod on) und wurden zurückgegeben."), false);
     }
 
     @Override

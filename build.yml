@@ -13,9 +13,9 @@ jobs:
           java-version: 21
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: 8.14.3
+          gradle-version: current
       - run: gradle build
       - uses: actions/upload-artifact@v4
         with:
           name: donutmod-jar
-          path: build/libs/donutmod-1.0.0.jar
+          path: build/libs/*.jar

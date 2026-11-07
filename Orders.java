@@ -19,6 +19,7 @@ public class Orders {
 
     public Orders(PriceBook p, MetaManager m, Economy e) { prices = p; meta = m; eco = e; }
     public void remove(Order o) { orders.remove(o); }
+    public void removeIf(java.util.function.Predicate<Order> p) { orders.removeIf(p); }
     public List<Order> all() { return Collections.unmodifiableList(orders); }
 
     /** Bot-Order: Preis 1.0-1.5x Sell-Preis, bei Meta nur runter (Faktor). */

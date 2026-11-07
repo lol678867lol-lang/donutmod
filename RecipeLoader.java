@@ -28,7 +28,8 @@ final class RecipeLoader {
     private static void parse(JsonObject o, RecipeGraph g) {
         String type = o.get("type").getAsString().replace("minecraft:", "");
         String out; int outCount = 1;
-        JsonElement res = o.get("result");
+        JsonElement res = o.has("result") ? o.get("result") : o.get("results");
+        if (res != null && res.isJsonArray()) res = res.getAsJsonArray().isEmpty() ? null : res.getAsJsonArray().get(0);
         if (res == null) return;
         if (res.isJsonPrimitive()) out = res.getAsString();
         else {
@@ -68,7 +69,23 @@ final class RecipeLoader {
                     ings.add(new RecipeGraph.Ing(opts, 1));
                 }
             }
-            default -> { return; }
+            default -> {
+                // Unbekannter (Mod-)Rezepttyp: generisch versuchen, "ingredients"/"ingredient" zu lesen
+                JsonElement all = o.has("ingredients") ? o.get("ingredients") : o.get("ingredient");
+                if (all == null) return;
+                if (all.isJsonArray()) {
+                    for (JsonElement el : all.getAsJsonArray()) {
+                        List<String> opts = options(el);
+                        if (opts.isEmpty()) return;
+                        ings.add(new RecipeGraph.Ing(opts, 1));
+                    }
+                } else {
+                    List<String> opts = options(all);
+                    if (opts.isEmpty()) return;
+                    ings.add(new RecipeGraph.Ing(opts, 1));
+                }
+                if (ings.isEmpty()) return;
+            }
         }
         g.add(new RecipeGraph.Recipe(out, outCount, ings));
     }
@@ -78,7 +95,12 @@ final class RecipeLoader {
         List<String> out = new ArrayList<>();
         if (el == null) return out;
         if (el.isJsonPrimitive()) add(out, el.getAsString());
-        else if (el.isJsonArray()) for (JsonElement x : el.getAsJsonArray()) { if (x.isJsonPrimitive()) add(out, x.getAsString()); }
+        else if (el.isJsonObject()) {                       // altes/Mod-Format: {"item": "..."} oder {"tag": "..."}
+            JsonObject jo = el.getAsJsonObject();
+            if (jo.has("item")) add(out, jo.get("item").getAsString());
+            else if (jo.has("id")) add(out, jo.get("id").getAsString());
+            else if (jo.has("tag")) add(out, "#" + jo.get("tag").getAsString());
+        } else if (el.isJsonArray()) for (JsonElement x : el.getAsJsonArray()) out.addAll(options(x));
         return out;
     }
 

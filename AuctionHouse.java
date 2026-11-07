@@ -16,6 +16,8 @@ public class AuctionHouse {
     public AuctionHouse(PriceBook p, MetaManager m, Economy e) { prices = p; meta = m; eco = e; }
     public List<Listing> all() { return Collections.unmodifiableList(listings); }
 
+    public void removeIf(java.util.function.Predicate<Listing> p) { listings.removeIf(p); }
+
     public Listing list(UUID seller, Stack s, long price) {
         Listing l = new Listing(nextId++, seller, s, price);
         listings.add(l);
